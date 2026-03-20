@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+*.wav
+*.m4a
+*.tmp
+_tts_temp/
+test_bgm.mp3
