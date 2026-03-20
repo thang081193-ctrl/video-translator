@@ -1,7 +1,47 @@
 import json
 import os
+import threading
 
 from faster_whisper import WhisperModel
+
+
+# ─── Global model cache (load once, reuse across jobs) ───────────────────────
+_model_cache: dict[str, WhisperModel] = {}
+_model_lock = threading.Lock()
+
+
+def _get_model(model_name: str) -> WhisperModel:
+    """Get or create a cached Whisper model. Thread-safe."""
+    with _model_lock:
+        if model_name in _model_cache:
+            print(f"  Reusing cached Whisper model: {model_name}")
+            return _model_cache[model_name]
+
+        print(f"  Loading Whisper model: {model_name}")
+
+        # Try GPU first
+        try:
+            model = WhisperModel(model_name, device="cuda", compute_type="float16")
+            print("  Model loaded on GPU (CUDA)")
+            _model_cache[model_name] = model
+            return model
+        except Exception as e:
+            print(f"  GPU init failed ({e}), using CPU...")
+
+        model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        print("  Model loaded on CPU")
+        _model_cache[model_name] = model
+        return model
+
+
+def _fallback_to_cpu(model_name: str) -> WhisperModel:
+    """Replace cached GPU model with CPU model after runtime failure."""
+    with _model_lock:
+        print(f"  GPU runtime error — switching to CPU model")
+        model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        _model_cache[model_name] = model
+        print("  CPU model ready")
+        return model
 
 
 def transcribe(
@@ -31,8 +71,9 @@ def transcribe(
             data = json.load(f)
         return data["segments"], data["language"]
 
-    # Load model and transcribe — try GPU first, fallback to CPU
-    print(f"  Loading Whisper model: {model_name}")
+    # Get cached model (loaded once, reused across jobs)
+    model = _get_model(model_name)
+
     transcribe_kwargs = {
         "beam_size": 5,
         "vad_filter": True,
@@ -40,22 +81,16 @@ def transcribe(
     if source_lang:
         transcribe_kwargs["language"] = source_lang
 
-    raw_segments = None
-    info = None
-
-    # Try GPU first
+    print("  Transcribing...")
     try:
-        model = WhisperModel(model_name, device="cuda", compute_type="float16")
-        print("  Using GPU (CUDA)")
-        print("  Transcribing...")
         raw_segments, info = model.transcribe(audio_path, **transcribe_kwargs)
-        # Force iteration to catch GPU errors early (lazy generator)
+        # Force iteration (lazy generator) — catches GPU errors early
         raw_segments = list(raw_segments)
     except Exception as e:
-        print(f"  GPU failed ({e}), falling back to CPU...")
-        model = WhisperModel(model_name, device="cpu", compute_type="int8")
-        print("  Using CPU")
-        print("  Transcribing...")
+        # GPU model was cached but failed at runtime (e.g. cublas missing)
+        # Fall back to CPU and retry
+        print(f"  GPU transcription failed ({e}), falling back to CPU...")
+        model = _fallback_to_cpu(model_name)
         raw_segments, info = model.transcribe(audio_path, **transcribe_kwargs)
         raw_segments = list(raw_segments)
 

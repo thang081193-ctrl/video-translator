@@ -74,3 +74,54 @@ def extract_audio(video_path: str, output_dir: str | None = None) -> str:
     )
 
     return wav_path
+
+
+def extract_audio_hq(video_path: str, output_dir: str | None = None) -> str:
+    """Extract audio at high quality (44.1kHz stereo) for Demucs source separation."""
+    check_ffmpeg()
+
+    if not os.path.isfile(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    if output_dir is None:
+        output_dir = os.path.dirname(os.path.abspath(video_path))
+    os.makedirs(output_dir, exist_ok=True)
+
+    base_name = os.path.splitext(os.path.basename(video_path))[0]
+    wav_path = os.path.join(output_dir, f"{base_name}_hq.wav")
+
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-vn",
+            "-acodec", "pcm_s16le",
+            "-ar", "44100",
+            "-ac", "2",
+            wav_path,
+        ],
+        capture_output=True, text=True, check=True,
+    )
+
+    return wav_path
+
+
+def get_video_info(video_path: str) -> dict:
+    """Get video width, height, and duration using ffprobe."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams",
+            "-select_streams", "v:0",
+            video_path,
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    data = json.loads(result.stdout)
+    stream = data["streams"][0]
+    return {
+        "width": int(stream["width"]),
+        "height": int(stream["height"]),
+        "codec": stream.get("codec_name", ""),
+    }

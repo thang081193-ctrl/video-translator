@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Translator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+<style>
+/* ─── Reset & Base ───────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --blue-600: #1a73e8;
+  --blue-500: #4285f4;
+  --blue-100: #d2e3fc;
+  --blue-50: #e8f0fe;
+  --green-600: #1e8e3e;
+  --green-50: #e6f4ea;
+  --red-600: #d93025;
+  --red-50: #fce8e6;
+  --yellow-600: #f9ab00;
+  --grey-900: #202124;
+  --grey-700: #5f6368;
+  --grey-500: #9aa0a6;
+  --grey-300: #dadce0;
+  --grey-200: #e8eaed;
+  --grey-100: #f1f3f4;
+  --grey-50: #f8f9fa;
+  --white: #ffffff;
+  --shadow-1: 0 1px 2px 0 rgba(60,64,67,.3), 0 1px 3px 1px rgba(60,64,67,.15);
+  --shadow-2: 0 1px 2px 0 rgba(60,64,67,.3), 0 2px 6px 2px rgba(60,64,67,.15);
+  --shadow-3: 0 1px 3px 0 rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --transition: 200ms cubic-bezier(.4,0,.2,1);
+}
+
+body {
+  font-family: 'Roboto', 'Google Sans', -apple-system, sans-serif;
+  background: var(--grey-50);
+  color: var(--grey-900);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Top Bar ────────────────────────────────────────────────────── */
+.topbar {
+  background: var(--white);
+  border-bottom: 1px solid var(--grey-200);
+  padding: 0 24px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.topbar-icon {
+  width: 40px; height: 40px;
+  background: var(--blue-600);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: white;
+  font-size: 20px;
+}
+
+.topbar h1 {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--grey-900);
+}
+
+.topbar h1 span { color: var(--grey-500); font-weight: 300; font-size: 14px; margin-left: 8px; }
+
+/* ─── Container ──────────────────────────────────────────────────── */
+.container {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}
+
+/* ─── Card ───────────────────────────────────────────────────────── */
+.card {
+  background: var(--white);
+  border-radius: var(--radius);
+  border: 1px solid var(--grey-200);
+  padding: 32px;
+  margin-bottom: 24px;
+  transition: box-shadow var(--transition);
+}
+.card:hover { box-shadow: var(--shadow-1); }
+
+.card-title {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--grey-900);
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.card-title .material-icons-outlined { color: var(--blue-600); font-size: 22px; }
+
+/* ─── Upload Area ────────────────────────────────────────────────── */
+.upload-area {
+  border: 2px dashed var(--grey-300);
+  border-radius: var(--radius);
+  padding: 48px 32px;
+  text-align: center;
+  cursor: pointer;
+  transition: all var(--transition);
+  position: relative;
+}
+.upload-area:hover, .upload-area.dragover {
+  border-color: var(--blue-600);
+  background: var(--blue-50);
+}
+.upload-area .material-icons-outlined {
+  font-size: 48px;
+  color: var(--blue-600);
+  margin-bottom: 12px;
+}
+.upload-area p { color: var(--grey-700); font-size: 14px; margin-top: 4px; }
+.upload-area .upload-label {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 16px;
+  color: var(--grey-900);
+  font-weight: 500;
+}
+.upload-area .browse-link { color: var(--blue-600); font-weight: 500; cursor: pointer; }
+.upload-area input[type="file"] { display: none; }
+
+.file-info {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: var(--blue-50);
+  border-radius: var(--radius-sm);
+  margin-top: 16px;
+}
+.file-info.visible { display: flex; }
+.file-info .material-icons-outlined { color: var(--blue-600); font-size: 24px; }
+.file-info .file-name { flex: 1; font-size: 14px; font-weight: 500; color: var(--grey-900); }
+.file-info .file-size { font-size: 13px; color: var(--grey-700); }
+.file-info .remove-btn {
+  background: none; border: none; cursor: pointer; color: var(--grey-700);
+  border-radius: 50%; width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background var(--transition);
+}
+.file-info .remove-btn:hover { background: var(--grey-200); }
+
+/* ─── Form Controls ──────────────────────────────────────────────── */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.form-group { position: relative; }
+.form-group.full-width { grid-column: 1 / -1; }
+
+.form-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--grey-700);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.form-group select,
+.form-group input[type="text"],
+.form-group input[type="number"] {
+  width: 100%;
+  height: 48px;
+  padding: 0 16px;
+  border: 1px solid var(--grey-300);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-family: 'Roboto', sans-serif;
+  color: var(--grey-900);
+  background: var(--white);
+  transition: border-color var(--transition), box-shadow var(--transition);
+  appearance: none;
+  -webkit-appearance: none;
+}
+.form-group select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%235f6368' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 40px;
+}
+
+.form-group select:focus,
+.form-group input:focus {
+  outline: none;
+  border-color: var(--blue-600);
+  box-shadow: 0 0 0 2px var(--blue-100);
+}
+
+/* ─── Toggle Switches ────────────────────────────────────────────── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border: 1px solid var(--grey-300);
+  border-radius: 100px;
+  cursor: pointer;
+  transition: all var(--transition);
+  user-select: none;
+  font-size: 14px;
+  color: var(--grey-700);
+}
+.toggle:hover { background: var(--grey-100); }
+.toggle.active {
+  border-color: var(--blue-600);
+  background: var(--blue-50);
+  color: var(--blue-600);
+}
+.toggle .material-icons-outlined { font-size: 20px; }
+.toggle input { display: none; }
+
+/* ─── BGM Upload (shown when dub is active) ──────────────────────── */
+.bgm-section {
+  display: none;
+  margin-top: 20px;
+  padding: 20px;
+  background: var(--grey-50);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--grey-200);
+}
+.bgm-section.visible { display: block; }
+.bgm-section label {
+  font-size: 13px; font-weight: 500; color: var(--grey-700);
+  margin-bottom: 8px; display: block;
+}
+.bgm-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border: 1px solid var(--grey-300);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all var(--transition);
+  color: var(--grey-700);
+}
+.bgm-upload-btn:hover { background: var(--grey-100); }
+.bgm-upload-btn input { display: none; }
+.bgm-file-name { margin-left: 8px; font-size: 13px; color: var(--grey-900); font-weight: 500; }
+
+/* ─── Submit Button ──────────────────────────────────────────────── */
+.submit-section { text-align: center; margin-top: 8px; }
+
+.btn-primary {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  padding: 0 32px;
+  height: 48px;
+  border: none;
+  border-radius: 24px;
+  background: var(--blue-600);
+  color: var(--white);
+  cursor: pointer;
+  transition: all var(--transition);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  letter-spacing: 0.25px;
+}
+.btn-primary:hover { background: #1557b0; box-shadow: var(--shadow-2); }
+.btn-primary:active { background: #174ea6; }
+.btn-primary:disabled {
+  background: var(--grey-300);
+  color: var(--grey-500);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* ─── Progress Section ───────────────────────────────────────────── */
+.progress-card { display: none; }
+.progress-card.visible { display: block; }
+
+.stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 28px;
+  position: relative;
+}
+.stepper::before {
+  content: '';
+  position: absolute;
+  top: 16px;
+  left: 32px;
+  right: 32px;
+  height: 2px;
+  background: var(--grey-200);
+  z-index: 0;
+}
+.stepper-progress {
+  position: absolute;
+  top: 16px;
+  left: 32px;
+  height: 2px;
+  background: var(--blue-600);
+  z-index: 1;
+  transition: width 600ms cubic-bezier(.4,0,.2,1);
+  width: 0%;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  z-index: 2;
+  position: relative;
+}
+.step-circle {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--grey-200);
+  color: var(--grey-500);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 500;
+  transition: all 400ms cubic-bezier(.4,0,.2,1);
+}
+.step.active .step-circle { background: var(--blue-600); color: white; }
+.step.done .step-circle { background: var(--green-600); color: white; }
+.step-label {
+  font-size: 11px;
+  color: var(--grey-500);
+  text-align: center;
+  max-width: 80px;
+  transition: color var(--transition);
+}
+.step.active .step-label { color: var(--blue-600); font-weight: 500; }
+.step.done .step-label { color: var(--green-600); }
+
+/* Progress bar */
+.progress-bar-container {
+  background: var(--grey-100);
+  border-radius: 100px;
+  height: 8px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue-600), var(--blue-500));
+  border-radius: 100px;
+  transition: width 600ms cubic-bezier(.4,0,.2,1);
+  width: 0%;
+  position: relative;
+}
+.progress-bar.animated::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.4), transparent);
+  animation: shimmer 2s infinite;
+}
+@keyframes shimmer { 0%{transform:translateX(-100%)} 100%{transform:translateX(100%)} }
+
+.progress-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+}
+.progress-status .label { color: var(--grey-700); }
+.progress-status .percent { color: var(--blue-600); font-weight: 500; font-family: 'Google Sans', sans-serif; }
+
+/* ─── Results ────────────────────────────────────────────────────── */
+.results-card { display: none; }
+.results-card.visible { display: block; }
+
+.result-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--grey-200);
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+  transition: background var(--transition);
+}
+.result-item:hover { background: var(--grey-50); }
+.result-icon {
+  width: 44px; height: 44px;
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+}
+.result-icon.srt { background: var(--blue-50); color: var(--blue-600); }
+.result-icon.video { background: var(--green-50); color: var(--green-600); }
+
+.result-info { flex: 1; }
+.result-info .name { font-size: 14px; font-weight: 500; color: var(--grey-900); }
+.result-info .type { font-size: 12px; color: var(--grey-700); margin-top: 2px; }
+
+.btn-download {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 20px;
+  border: 1px solid var(--blue-600);
+  border-radius: 100px;
+  background: transparent;
+  color: var(--blue-600);
+  cursor: pointer;
+  transition: all var(--transition);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+.btn-download:hover { background: var(--blue-50); }
+
+/* ─── Error ──────────────────────────────────────────────────────── */
+.error-banner {
+  display: none;
+  padding: 16px 20px;
+  background: var(--red-50);
+  border: 1px solid #f5c6cb;
+  border-radius: var(--radius-sm);
+  color: var(--red-600);
+  font-size: 14px;
+  margin-bottom: 20px;
+  align-items: flex-start;
+  gap: 12px;
+}
+.error-banner.visible { display: flex; }
+.error-banner .material-icons-outlined { font-size: 22px; flex-shrink: 0; margin-top: 1px; }
+.error-banner .error-text { flex: 1; word-break: break-word; }
+
+/* ─── New Translation button ─────────────────────────────────────── */
+.btn-outline {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 28px;
+  border: 1px solid var(--grey-300);
+  border-radius: 24px;
+  background: var(--white);
+  color: var(--grey-700);
+  cursor: pointer;
+  transition: all var(--transition);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.btn-outline:hover { background: var(--grey-100); border-color: var(--grey-500); }
+
+/* ─── Spinner ────────────────────────────────────────────────────── */
+.spinner {
+  width: 20px; height: 20px;
+  border: 2.5px solid rgba(255,255,255,.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  display: none;
+}
+.spinner.visible { display: block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Responsive ─────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .container { padding: 16px 12px 48px; }
+  .card { padding: 20px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .upload-area { padding: 32px 16px; }
+  .stepper { gap: 2px; }
+  .step-label { font-size: 10px; max-width: 56px; }
+  .topbar h1 span { display: none; }
+}
+
+/* ─── Animations ─────────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.card { animation: fadeUp 400ms cubic-bezier(.4,0,.2,1) both; }
+.card:nth-child(2) { animation-delay: 80ms; }
+.card:nth-child(3) { animation-delay: 160ms; }
+
+.success-icon {
+  width: 56px; height: 56px;
+  background: var(--green-50);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 16px;
+  color: var(--green-600);
+  font-size: 28px;
+}
+
+/* ─── File list (batch) ─────────────────────────────────────────── */
+.file-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-radius: 10px;
+  background: var(--grey-50); margin-bottom: 6px;
+  font-size: 14px;
+}
+.file-item .material-icons-outlined { color: var(--blue-600); font-size: 20px; }
+.file-item .name { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-item .size { color: var(--grey-600); font-size: 12px; min-width: 60px; text-align: right; }
+.file-item .remove-item { cursor: pointer; color: var(--grey-500); border: none; background: none; padding: 2px; border-radius: 50%; }
+.file-item .remove-item:hover { color: var(--red-600); background: var(--red-50, #fce8e6); }
+
+/* ─── Batch progress ────────────────────────────────────────────── */
+.batch-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; border-radius: 12px;
+  background: var(--grey-50); margin-bottom: 8px;
+  transition: background 300ms;
+}
+.batch-item.active { background: var(--blue-50); }
+.batch-item.done { background: var(--green-50, #e6f4ea); }
+.batch-item.error { background: var(--red-50, #fce8e6); }
+.batch-item .batch-icon { font-size: 20px; }
+.batch-item.active .batch-icon { color: var(--blue-600); }
+.batch-item.done .batch-icon { color: var(--green-600); }
+.batch-item.error .batch-icon { color: var(--red-600, #d93025); }
+.batch-item .batch-name { flex: 1; font-weight: 500; font-size: 14px; }
+.batch-item .batch-status { font-size: 12px; color: var(--grey-600); }
+.batch-item.active .batch-status { color: var(--blue-600); font-weight: 500; }
+</style>
+</head>
+<body>
+
+<!-- ─── Top Bar ──────────────────────────────────────────────────── -->
+<header class="topbar">
+  <div class="topbar-icon">
+    <span class="material-icons-outlined">translate</span>
+  </div>
+  <h1>Video Translator <span>Whisper + Gemini AI</span></h1>
+</header>
+
+<!-- ─── Main Content ─────────────────────────────────────────────── -->
+<main class="container">
+
+  <!-- Upload Card -->
+  <div class="card" id="uploadCard">
+    <div class="card-title">
+      <span class="material-icons-outlined">cloud_upload</span>
+      Upload videos
+      <span style="font-size:13px; color:var(--grey-600); font-weight:400; margin-left:8px;">(up to 5 files)</span>
+    </div>
+    <div class="upload-area" id="uploadArea">
+      <span class="material-icons-outlined">video_file</span>
+      <div class="upload-label">
+        Drag & drop videos here, or <span class="browse-link">browse files</span>
+      </div>
+      <p>Supports MP4, MKV, AVI, MOV, WebM — select multiple</p>
+      <input type="file" id="videoInput" accept="video/*" multiple>
+    </div>
+    <div id="fileList" style="display:none;">
+      <div id="fileListItems"></div>
+      <button class="btn-outline" id="addMoreBtn" style="margin-top:8px; font-size:13px; padding:6px 14px;">
+        <span class="material-icons-outlined" style="font-size:16px;">add</span> Add more
+      </button>
+    </div>
+  </div>
+
+  <!-- Settings Card -->
+  <div class="card" id="settingsCard">
+    <div class="card-title">
+      <span class="material-icons-outlined">tune</span>
+      Translation settings
+    </div>
+
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Source language</label>
+        <select id="sourceLang">
+          <option value="">Auto-detect</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Target language</label>
+        <select id="targetLang" required></select>
+      </div>
+      <div class="form-group">
+        <label>Whisper model</label>
+        <select id="whisperModel">
+          <option value="tiny">Tiny — Fastest</option>
+          <option value="base" selected>Base — Fast</option>
+          <option value="medium">Medium — Balanced</option>
+          <option value="large-v3">Large v3 — Best quality</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Batch size</label>
+        <input type="number" id="batchSize" value="20" min="1" max="50">
+      </div>
+
+      <div class="form-group full-width">
+        <label>Options</label>
+        <div class="toggle-row">
+          <label class="toggle" id="toggleBurn">
+            <input type="checkbox" id="burnCheck">
+            <span class="material-icons-outlined">subtitles</span>
+            Burn subtitles
+          </label>
+          <label class="toggle" id="toggleDub">
+            <input type="checkbox" id="dubCheck">
+            <span class="material-icons-outlined">record_voice_over</span>
+            AI Dubbing
+          </label>
+          <label class="toggle" id="toggleOcr">
+            <input type="checkbox" id="ocrCheck">
+            <span class="material-icons-outlined">text_fields</span>
+            Translate on-screen text
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Audio Mode section (dub only) -->
+    <div class="bgm-section" id="bgmSection">
+      <label>Audio mode</label>
+      <div class="toggle-row" style="margin-bottom: 16px;">
+        <label class="toggle active" id="toggleKeepBgm">
+          <input type="radio" name="audioMode" value="keep_original_bgm" checked>
+          <span class="material-icons-outlined">music_note</span>
+          Keep original BGM
+        </label>
+        <label class="toggle" id="toggleCustomBgm">
+          <input type="radio" name="audioMode" value="custom_bgm">
+          <span class="material-icons-outlined">library_music</span>
+          Custom BGM
+        </label>
+      </div>
+
+      <!-- Custom BGM upload -->
+      <div id="customBgmUpload" style="display:none;">
+        <label>Background music file</label>
+        <label class="bgm-upload-btn">
+          <span class="material-icons-outlined">upload_file</span>
+          Choose audio file
+          <input type="file" id="bgmInput" accept="audio/*">
+        </label>
+        <span class="bgm-file-name" id="bgmFileName"></span>
+
+        <div style="margin-top: 16px;">
+          <label>BGM Volume: <span id="bgmVolumeLabel">25%</span></label>
+          <input type="range" id="bgmVolumeSlider" min="5" max="50" value="25"
+                 style="width:100%; accent-color:var(--blue-600); margin-top:8px;">
+        </div>
+      </div>
+    </div>
+
+    <!-- Submit -->
+    <div class="submit-section" style="margin-top: 28px;">
+      <button class="btn-primary" id="submitBtn" disabled>
+        <span class="material-icons-outlined">auto_awesome</span>
+        Start translation
+        <div class="spinner" id="submitSpinner"></div>
+      </button>
+    </div>
+  </div>
+
+  <!-- Error Banner -->
+  <div class="error-banner" id="errorBanner">
+    <span class="material-icons-outlined">error_outline</span>
+    <span class="error-text" id="errorText"></span>
+  </div>
+
+  <!-- Progress Card -->
+  <div class="card progress-card" id="progressCard">
+    <div class="card-title">
+      <span class="material-icons-outlined">pending</span>
+      Processing
+      <span id="batchCounter" style="font-size:13px; color:var(--grey-600); font-weight:400; margin-left:auto;"></span>
+    </div>
+
+    <!-- Batch file list -->
+    <div id="batchList" style="margin-bottom:16px; display:none;"></div>
+
+    <div class="stepper" id="stepper">
+      <div class="stepper-progress" id="stepperProgress"></div>
+    </div>
+
+    <div class="progress-bar-container">
+      <div class="progress-bar animated" id="progressBar"></div>
+    </div>
+    <div class="progress-status">
+      <span class="label" id="progressLabel">Starting...</span>
+      <span class="percent" id="progressPercent">0%</span>
+    </div>
+  </div>
+
+  <!-- Results Card -->
+  <div class="card results-card" id="resultsCard">
+    <div style="text-align:center; margin-bottom: 24px;">
+      <div class="success-icon">
+        <span class="material-icons-outlined">check_circle</span>
+      </div>
+      <div class="card-title" style="justify-content:center; margin-bottom: 4px;">Translation complete</div>
+      <p style="color:var(--grey-700); font-size:14px;">Your files are ready to download</p>
+    </div>
+
+    <div id="resultsList"></div>
+
+    <div style="text-align:center; margin-top: 24px;">
+      <button class="btn-outline" id="newTranslationBtn">
+        <span class="material-icons-outlined">add</span>
+        New translation
+      </button>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ─── Elements ─────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+const uploadArea = $('uploadArea');
+const videoInput = $('videoInput');
+const fileList = $('fileList');
+const fileListItems = $('fileListItems');
+const addMoreBtn = $('addMoreBtn');
+const sourceLang = $('sourceLang');
+const targetLang = $('targetLang');
+const whisperModel = $('whisperModel');
+const batchSize = $('batchSize');
+const burnCheck = $('burnCheck');
+const dubCheck = $('dubCheck');
+const ocrCheck = $('ocrCheck');
+const toggleBurn = $('toggleBurn');
+const toggleDub = $('toggleDub');
+const toggleOcr = $('toggleOcr');
+const bgmSection = $('bgmSection');
+const customBgmUpload = $('customBgmUpload');
+const bgmInput = $('bgmInput');
+const bgmFileName = $('bgmFileName');
+const bgmVolumeSlider = $('bgmVolumeSlider');
+const bgmVolumeLabel = $('bgmVolumeLabel');
+const audioModeRadios = document.querySelectorAll('input[name="audioMode"]');
+const toggleKeepBgm = $('toggleKeepBgm');
+const toggleCustomBgm = $('toggleCustomBgm');
+const submitBtn = $('submitBtn');
+const submitSpinner = $('submitSpinner');
+const errorBanner = $('errorBanner');
+const errorText = $('errorText');
+const progressCard = $('progressCard');
+const stepper = $('stepper');
+const progressBar = $('progressBar');
+const progressLabel = $('progressLabel');
+const progressPercent = $('progressPercent');
+const batchCounter = $('batchCounter');
+const batchList = $('batchList');
+const resultsCard = $('resultsCard');
+const resultsList = $('resultsList');
+const uploadCard = $('uploadCard');
+const settingsCard = $('settingsCard');
+
+let selectedVideos = [];  // array of File objects
+let selectedBgm = null;
+let batchJobs = [];  // [{file, jobId, status, files}]
+let pollTimer = null;
+
+const MAX_FILES = 5;
+
+// ─── Load languages ───────────────────────────────────────────────
+fetch('/api/languages').then(r => r.json()).then(data => {
+  data.languages.forEach(lang => {
+    sourceLang.add(new Option(lang.name, lang.code));
+    targetLang.add(new Option(lang.name, lang.code));
+  });
+  targetLang.value = 'vi';
+});
+
+// ─── File upload (multi) ─────────────────────────────────────────
+uploadArea.addEventListener('click', () => videoInput.click());
+uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadArea.classList.remove('dragover');
+  if (e.dataTransfer.files.length) addVideoFiles(e.dataTransfer.files);
+});
+videoInput.addEventListener('change', () => { if (videoInput.files.length) addVideoFiles(videoInput.files); videoInput.value = ''; });
+addMoreBtn.addEventListener('click', () => videoInput.click());
+
+function addVideoFiles(files) {
+  for (const f of files) {
+    if (selectedVideos.length >= MAX_FILES) break;
+    if (!selectedVideos.some(v => v.name === f.name && v.size === f.size)) {
+      selectedVideos.push(f);
+    }
+  }
+  renderFileList();
+  updateSubmitState();
+}
+
+function removeVideoFile(idx) {
+  selectedVideos.splice(idx, 1);
+  renderFileList();
+  updateSubmitState();
+}
+
+function renderFileList() {
+  if (selectedVideos.length === 0) {
+    fileList.style.display = 'none';
+    uploadArea.style.display = '';
+    return;
+  }
+  uploadArea.style.display = 'none';
+  fileList.style.display = '';
+  addMoreBtn.style.display = selectedVideos.length >= MAX_FILES ? 'none' : '';
+  fileListItems.innerHTML = selectedVideos.map((f, i) => `
+    <div class="file-item">
+      <span class="material-icons-outlined">movie</span>
+      <span class="name">${f.name}</span>
+      <span class="size">${formatSize(f.size)}</span>
+      <button class="remove-item" onclick="removeVideoFile(${i})" title="Remove">
+        <span class="material-icons-outlined" style="font-size:18px">close</span>
+      </button>
+    </div>
+  `).join('');
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+  return (bytes / 1073741824).toFixed(2) + ' GB';
+}
+
+// ─── Toggles ──────────────────────────────────────────────────────
+burnCheck.addEventListener('change', () => toggleBurn.classList.toggle('active', burnCheck.checked));
+ocrCheck.addEventListener('change', () => toggleOcr.classList.toggle('active', ocrCheck.checked));
+
+dubCheck.addEventListener('change', () => {
+  toggleDub.classList.toggle('active', dubCheck.checked);
+  bgmSection.classList.toggle('visible', dubCheck.checked);
+  updateSubmitState();
+});
+
+audioModeRadios.forEach(radio => {
+  radio.addEventListener('change', () => {
+    const mode = document.querySelector('input[name="audioMode"]:checked').value;
+    toggleKeepBgm.classList.toggle('active', mode === 'keep_original_bgm');
+    toggleCustomBgm.classList.toggle('active', mode === 'custom_bgm');
+    customBgmUpload.style.display = mode === 'custom_bgm' ? '' : 'none';
+    updateSubmitState();
+  });
+});
+
+bgmInput.addEventListener('change', () => {
+  if (bgmInput.files[0]) {
+    selectedBgm = bgmInput.files[0];
+    bgmFileName.textContent = selectedBgm.name;
+    updateSubmitState();
+  }
+});
+
+bgmVolumeSlider.addEventListener('input', () => {
+  bgmVolumeLabel.textContent = bgmVolumeSlider.value + '%';
+});
+
+// ─── Submit state ─────────────────────────────────────────────────
+function getAudioMode() {
+  return document.querySelector('input[name="audioMode"]:checked').value;
+}
+
+function updateSubmitState() {
+  if (!selectedVideos.length || !targetLang.value) { submitBtn.disabled = true; return; }
+  if (dubCheck.checked && getAudioMode() === 'custom_bgm' && !selectedBgm) {
+    submitBtn.disabled = true; return;
+  }
+  submitBtn.disabled = false;
+}
+targetLang.addEventListener('change', updateSubmitState);
+
+// ─── Submit (batch) ──────────────────────────────────────────────
+submitBtn.addEventListener('click', async () => {
+  if (submitBtn.disabled) return;
+  hideError();
+  submitBtn.disabled = true;
+  submitSpinner.classList.add('visible');
+
+  // Upload all videos — create one job per video
+  batchJobs = selectedVideos.map(f => ({ file: f, jobId: null, status: 'uploading', data: null }));
+  showProgress();
+
+  for (let i = 0; i < batchJobs.length; i++) {
+    const bj = batchJobs[i];
+    try {
+      const formData = new FormData();
+      formData.append('video', bj.file);
+      formData.append('target_lang', targetLang.value);
+      formData.append('source_lang', sourceLang.value);
+      formData.append('whisper_model', whisperModel.value);
+      formData.append('batch_size', batchSize.value);
+      formData.append('burn', burnCheck.checked);
+      formData.append('dub', dubCheck.checked);
+      formData.append('translate_ocr', ocrCheck.checked);
+      if (dubCheck.checked) {
+        formData.append('audio_mode', getAudioMode());
+        formData.append('bgm_volume', (bgmVolumeSlider.value / 100).toFixed(2));
+        if (getAudioMode() === 'custom_bgm' && selectedBgm) {
+          formData.append('bgm', selectedBgm);
+        }
+      }
+      const resp = await fetch('/api/translate', { method: 'POST', body: formData });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Upload failed');
+      bj.jobId = data.job_id;
+      bj.status = 'queued';
+    } catch (err) {
+      bj.status = 'error';
+      bj.data = { error: err.message };
+    }
+    renderBatchList();
+  }
+
+  submitSpinner.classList.remove('visible');
+  startBatchPolling();
+});
+
+// ─── Batch progress ──────────────────────────────────────────────
+function showProgress() {
+  uploadCard.style.display = 'none';
+  settingsCard.style.display = 'none';
+  progressCard.classList.add('visible');
+  resultsCard.classList.remove('visible');
+  batchList.style.display = batchJobs.length > 1 ? '' : 'none';
+  renderBatchList();
+}
+
+function renderBatchList() {
+  const total = batchJobs.length;
+  const done = batchJobs.filter(j => j.status === 'done').length;
+  const err = batchJobs.filter(j => j.status === 'error').length;
+
+  if (total > 1) {
+    batchCounter.textContent = `${done + err} / ${total} videos`;
+    batchList.style.display = '';
+    batchList.innerHTML = batchJobs.map((bj, i) => {
+      let cls = '', icon = 'hourglass_empty', statusText = 'Queued';
+      if (bj.status === 'running') { cls = 'active'; icon = 'sync'; statusText = bj.data?.step_label || 'Processing...'; }
+      else if (bj.status === 'done') { cls = 'done'; icon = 'check_circle'; statusText = 'Complete'; }
+      else if (bj.status === 'error') { cls = 'error'; icon = 'error'; statusText = 'Error'; }
+      else if (bj.status === 'uploading') { cls = 'active'; icon = 'cloud_upload'; statusText = 'Uploading...'; }
+      return `<div class="batch-item ${cls}">
+        <span class="material-icons-outlined batch-icon">${icon}</span>
+        <span class="batch-name">${bj.file.name}</span>
+        <span class="batch-status">${statusText}</span>
+      </div>`;
+    }).join('');
+  } else {
+    batchCounter.textContent = '';
+  }
+}
+
+function getStepLabels(totalSteps) {
+  const labels = ['Audio', 'Transcribe', 'Translate', 'Subtitles'];
+  if (ocrCheck.checked) labels.push('OCR');
+  if (dubCheck.checked) { labels.push('TTS'); labels.push('Merge'); }
+  labels.push('Finalize');
+  while (labels.length < totalSteps) labels.splice(labels.length - 1, 0, '...');
+  return labels.slice(0, totalSteps);
+}
+
+function buildStepper(totalSteps) {
+  const labels = getStepLabels(totalSteps);
+  stepper.innerHTML = '<div class="stepper-progress" id="stepperProgress"></div>';
+  labels.forEach((label, i) => {
+    const div = document.createElement('div');
+    div.className = 'step';
+    div.dataset.step = i + 1;
+    div.innerHTML = `<div class="step-circle">${i + 1}</div><div class="step-label">${label}</div>`;
+    stepper.appendChild(div);
+  });
+}
+
+function updateCurrentJobProgress(data) {
+  const { step, total_steps, step_label, progress } = data;
+  if (stepper.querySelectorAll('.step').length !== total_steps) buildStepper(total_steps);
+  stepper.querySelectorAll('.step').forEach(el => {
+    const s = parseInt(el.dataset.step);
+    el.classList.toggle('done', s < step);
+    el.classList.toggle('active', s === step);
+  });
+  const sp = document.getElementById('stepperProgress');
+  if (sp && total_steps > 1) sp.style.width = `${Math.max(0, ((step - 1) / (total_steps - 1)) * 100)}%`;
+
+  // Overall progress across all batch jobs
+  const totalJobs = batchJobs.length;
+  const doneJobs = batchJobs.filter(j => j.status === 'done' || j.status === 'error').length;
+  const currentIdx = batchJobs.findIndex(j => j.status === 'running');
+  const overallPct = Math.round(((doneJobs + (progress / 100)) / totalJobs) * 100);
+
+  progressBar.style.width = overallPct + '%';
+  const prefix = totalJobs > 1 ? `[${doneJobs + 1}/${totalJobs}] ` : '';
+  progressLabel.textContent = prefix + step_label;
+  progressPercent.textContent = overallPct + '%';
+}
+
+function startBatchPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    let allDone = true;
+    for (const bj of batchJobs) {
+      if (!bj.jobId || bj.status === 'done' || bj.status === 'error') continue;
+      allDone = false;
+      try {
+        const resp = await fetch(`/api/status/${bj.jobId}`);
+        const data = await resp.json();
+        bj.data = data;
+        if (data.status === 'done') { bj.status = 'done'; }
+        else if (data.status === 'error') { bj.status = 'error'; }
+        else { bj.status = 'running'; }
+        // Update stepper for the currently running job
+        if (bj.status === 'running') updateCurrentJobProgress(data);
+      } catch (e) { /* ignore */ }
+    }
+    renderBatchList();
+
+    if (allDone || batchJobs.every(j => j.status === 'done' || j.status === 'error')) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      progressBar.classList.remove('animated');
+      showBatchResults();
+    }
+  }, 1000);
+}
+
+// ─── Results ──────────────────────────────────────────────────────
+function showBatchResults() {
+  progressCard.classList.remove('visible');
+  resultsCard.classList.add('visible');
+
+  const doneCount = batchJobs.filter(j => j.status === 'done').length;
+  const errCount = batchJobs.filter(j => j.status === 'error').length;
+
+  let html = '';
+  for (const bj of batchJobs) {
+    if (bj.status === 'done' && bj.data && bj.data.files) {
+      if (batchJobs.length > 1) {
+        html += `<div style="font-weight:600; font-size:14px; margin:16px 0 8px; color:var(--grey-800);">
+          <span class="material-icons-outlined" style="font-size:16px;vertical-align:-3px;color:var(--green-600);">check_circle</span>
+          ${bj.file.name}
+        </div>`;
+      }
+      bj.data.files.forEach(file => {
+        const iconClass = file.type === 'srt' ? 'srt' : 'video';
+        const icon = file.type === 'srt' ? 'closed_caption' : 'smart_display';
+        html += `<div class="result-item">
+          <div class="result-icon ${iconClass}"><span class="material-icons-outlined">${icon}</span></div>
+          <div class="result-info"><div class="name">${file.name}</div><div class="type">${file.label}</div></div>
+          <a class="btn-download" href="/api/download/${bj.jobId}/${file.name}" download>
+            <span class="material-icons-outlined" style="font-size:18px">download</span> Download
+          </a>
+        </div>`;
+      });
+    } else if (bj.status === 'error') {
+      html += `<div style="font-weight:600; font-size:14px; margin:16px 0 4px; color:var(--red-600, #d93025);">
+        <span class="material-icons-outlined" style="font-size:16px;vertical-align:-3px;">error</span>
+        ${bj.file.name} — Error
+      </div>
+      <div style="font-size:13px; color:var(--grey-600); margin-bottom:8px;">${bj.data?.error || 'Unknown error'}</div>`;
+    }
+  }
+  resultsList.innerHTML = html;
+}
+
+// ─── New translation ──────────────────────────────────────────────
+$('newTranslationBtn').addEventListener('click', () => {
+  resetForm();
+  resultsCard.classList.remove('visible');
+  uploadCard.style.display = '';
+  settingsCard.style.display = '';
+});
+
+function resetForm() {
+  selectedVideos = [];
+  selectedBgm = null;
+  batchJobs = [];
+  videoInput.value = '';
+  bgmInput.value = '';
+  bgmFileName.textContent = '';
+  fileList.style.display = 'none';
+  fileListItems.innerHTML = '';
+  uploadArea.style.display = '';
+  submitBtn.disabled = true;
+  submitSpinner.classList.remove('visible');
+  progressBar.style.width = '0%';
+  progressBar.classList.add('animated');
+  uploadCard.style.display = '';
+  settingsCard.style.display = '';
+  progressCard.classList.remove('visible');
+  batchList.style.display = 'none';
+  batchCounter.textContent = '';
+  customBgmUpload.style.display = 'none';
+  bgmVolumeSlider.value = 25;
+  bgmVolumeLabel.textContent = '25%';
+}
+
+// ─── Error handling ───────────────────────────────────────────────
+function showError(msg) {
+  errorText.textContent = msg;
+  errorBanner.classList.add('visible');
+}
+function hideError() { errorBanner.classList.remove('visible'); }
+
+// ─── Init ─────────────────────────────────────────────────────────
+updateSubmitState();
+</script>
+</body>
+</html>
