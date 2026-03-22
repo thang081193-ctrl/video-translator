@@ -670,6 +670,31 @@ body {
       </div>
     </div>
 
+    <!-- OCR Quality section (ocr only) -->
+    <div class="bgm-section" id="ocrQualitySection" style="display:none;">
+      <label>OCR Quality</label>
+      <div class="toggle-row">
+        <label class="toggle active" id="toggleOcrFast">
+          <input type="radio" name="ocrQuality" value="fast" checked>
+          <span class="material-icons-outlined">bolt</span>
+          Fast
+        </label>
+        <label class="toggle" id="toggleOcrQuality">
+          <input type="radio" name="ocrQuality" value="quality">
+          <span class="material-icons-outlined">auto_awesome</span>
+          Quality
+        </label>
+        <label class="toggle" id="toggleOcrPremium">
+          <input type="radio" name="ocrQuality" value="premium">
+          <span class="material-icons-outlined">diamond</span>
+          Premium
+        </label>
+      </div>
+      <p style="font-size:12px; color:var(--grey-700); margin-top:8px;">
+        Fast: drawtext overlay &nbsp;|&nbsp; Quality: rendered overlay &nbsp;|&nbsp; Premium: inpaint + tracked overlay
+      </p>
+    </div>
+
     <!-- Submit -->
     <div class="submit-section" style="margin-top: 28px;">
       <button class="btn-primary" id="submitBtn" disabled>
@@ -760,6 +785,11 @@ const bgmVolumeLabel = $('bgmVolumeLabel');
 const audioModeRadios = document.querySelectorAll('input[name="audioMode"]');
 const toggleKeepBgm = $('toggleKeepBgm');
 const toggleCustomBgm = $('toggleCustomBgm');
+const ocrQualitySection = $('ocrQualitySection');
+const ocrQualityRadios = document.querySelectorAll('input[name="ocrQuality"]');
+const toggleOcrFast = $('toggleOcrFast');
+const toggleOcrQuality = $('toggleOcrQuality');
+const toggleOcrPremium = $('toggleOcrPremium');
 const submitBtn = $('submitBtn');
 const submitSpinner = $('submitSpinner');
 const errorBanner = $('errorBanner');
@@ -851,7 +881,24 @@ function formatSize(bytes) {
 
 // ─── Toggles ──────────────────────────────────────────────────────
 burnCheck.addEventListener('change', () => toggleBurn.classList.toggle('active', burnCheck.checked));
-ocrCheck.addEventListener('change', () => toggleOcr.classList.toggle('active', ocrCheck.checked));
+ocrCheck.addEventListener('change', () => {
+  toggleOcr.classList.toggle('active', ocrCheck.checked);
+  ocrQualitySection.style.display = ocrCheck.checked ? 'block' : 'none';
+});
+
+// OCR quality radio toggle
+ocrQualityRadios.forEach(radio => {
+  radio.addEventListener('change', () => {
+    toggleOcrFast.classList.toggle('active', radio.value === 'fast' && radio.checked);
+    toggleOcrQuality.classList.toggle('active', radio.value === 'quality' && radio.checked);
+    toggleOcrPremium.classList.toggle('active', radio.value === 'premium' && radio.checked);
+    // Ensure only the selected one is active
+    [toggleOcrFast, toggleOcrQuality, toggleOcrPremium].forEach(t => {
+      const r = t.querySelector('input[type="radio"]');
+      t.classList.toggle('active', r.checked);
+    });
+  });
+});
 
 dubCheck.addEventListener('change', () => {
   toggleDub.classList.toggle('active', dubCheck.checked);
@@ -918,6 +965,10 @@ submitBtn.addEventListener('click', async () => {
       formData.append('burn', burnCheck.checked);
       formData.append('dub', dubCheck.checked);
       formData.append('translate_ocr', ocrCheck.checked);
+      if (ocrCheck.checked) {
+        const ocrQual = document.querySelector('input[name="ocrQuality"]:checked');
+        formData.append('ocr_quality', ocrQual ? ocrQual.value : 'fast');
+      }
       if (dubCheck.checked) {
         formData.append('audio_mode', getAudioMode());
         formData.append('bgm_volume', (bgmVolumeSlider.value / 100).toFixed(2));

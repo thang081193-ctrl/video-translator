@@ -9,11 +9,11 @@ import time
 
 from dotenv import load_dotenv
 
-from pipeline.audio import extract_audio, check_ffmpeg
+from pipeline.audio import extract_audio, extract_audio_hq, get_video_info, check_ffmpeg
 from pipeline.transcribe import transcribe
 from pipeline.translate import translate_segments
 from pipeline.subtitle import generate_srt
-from pipeline.burn import burn_subtitles
+from pipeline.burn import burn_subtitles, burn_ocr_overlay, burn_with_overlays
 from pipeline.dub import build_dubbed_audio, dub_video
 
 
@@ -36,6 +36,10 @@ def main():
     parser.add_argument("--dub", action="store_true", help="Generate dubbed video with TTS voice")
     parser.add_argument("--bgm", default=None, help="Path to background music file (required with --dub)")
     parser.add_argument("--tts-voice", default=None, help="Override default TTS voice (e.g., vi-VN-NamMinhNeural)")
+    # OCR options
+    parser.add_argument("--ocr", action="store_true", help="Detect and translate on-screen text (OCR)")
+    parser.add_argument("--ocr-quality", default="fast", choices=["fast", "quality", "premium"],
+                        help="OCR quality: fast (drawtext), quality (overlay), premium (inpaint+overlay)")
 
     args = parser.parse_args()
 
@@ -70,6 +74,8 @@ def main():
     use_cache = not args.no_cache
 
     total_steps = 7 if args.dub else 5
+    if args.ocr:
+        total_steps += 1
     start_time = time.time()
 
     # Step 1: Extract audio
@@ -113,35 +119,147 @@ def main():
         use_cache=use_cache,
     )
 
+    # Step 3.5 (optional): OCR — detect and translate on-screen text
+    ocr_filter = None
+    ocr_overlays = None
+    step_offset = 0
+    if args.ocr:
+        step_offset = 1
+        print(f"\n[Step 4/{total_steps}] Detecting on-screen text (OCR, {args.ocr_quality} mode)...")
+        try:
+            from pipeline.ocr import (
+                extract_key_frames, detect_text_regions,
+                group_persistent_texts, group_persistent_texts_tracked,
+                translate_ocr_texts, generate_drawtext_filter,
+                generate_overlay_images, inpaint_all_regions,
+            )
+
+            video_info = get_video_info(args.input)
+            frames_dir = os.path.join(output_dir, "_ocr_frames")
+            key_frames = extract_key_frames(args.input, frames_dir, interval=2.0)
+
+            print("  Running OCR on key frames...")
+            frame_results = detect_text_regions(key_frames, lang=source_lang)
+
+            if args.ocr_quality == "premium":
+                text_groups = group_persistent_texts_tracked(frame_results)
+            else:
+                text_groups = group_persistent_texts(frame_results)
+
+            if text_groups:
+                print(f"  Translating {len(text_groups)} on-screen texts...")
+                text_groups = translate_ocr_texts(text_groups, source_lang, target_lang)
+
+                # ffmpeg drawtext cannot render diacritics (Vietnamese, French, etc.)
+                ocr_qual = args.ocr_quality
+                _DRAWTEXT_UNSAFE = {"vi", "fr", "es", "de", "pt", "it", "ru", "th", "hi", "ar"}
+                if ocr_qual == "fast" and target_lang in _DRAWTEXT_UNSAFE:
+                    print(f"  Auto-upgrading OCR fast->quality (drawtext can't render {target_lang} diacritics)")
+                    ocr_qual = "quality"
+
+                if ocr_qual == "fast":
+                    ocr_filter = generate_drawtext_filter(
+                        text_groups, video_info["width"], video_info["height"], target_lang
+                    )
+                elif ocr_qual == "quality":
+                    print("  Rendering overlay images...")
+                    ocr_overlays = generate_overlay_images(
+                        text_groups, video_info["width"], video_info["height"],
+                        output_dir, target_lang,
+                    )
+                elif ocr_qual == "premium":
+                    print("  Inpainting text regions...")
+                    inpaint_patches = inpaint_all_regions(args.input, text_groups, frames_dir)
+                    print("  Rendering overlay images...")
+                    ocr_overlays = generate_overlay_images(
+                        text_groups, video_info["width"], video_info["height"],
+                        output_dir, target_lang, inpaint_patches=inpaint_patches,
+                    )
+            else:
+                print("  No persistent on-screen text found.")
+
+            if ocr_qual != "premium":
+                shutil.rmtree(frames_dir, ignore_errors=True)
+        except ImportError as e:
+            print(f"  OCR dependencies not available ({e}), skipping...")
+
     # Step 4: Generate SRT
+    srt_step = 4 + step_offset
     srt_path = os.path.join(output_dir, f"{video_base}.{target_lang}.srt")
-    print(f"\n[Step 4/{total_steps}] Generating SRT...")
+    print(f"\n[Step {srt_step}/{total_steps}] Generating SRT...")
     generate_srt(translated_segments, srt_path, text_key="translated_text")
 
-    # Step 5: Burn subtitles (if not dubbing) or skip
+    # Step 5: Burn subtitles / OCR overlay (if not dubbing) or skip
+    burn_step = 5 + step_offset
     if not args.dub:
-        if args.burn:
+        has_ocr_work = ocr_filter or ocr_overlays
+        if args.burn or has_ocr_work:
             video_ext = os.path.splitext(args.input)[1]
             output_video = os.path.join(output_dir, f"{video_base}.{target_lang}{video_ext}")
-            print(f"\n[Step 5/{total_steps}] Burning subtitles into video...")
-            burn_subtitles(args.input, srt_path, output_video)
-        else:
-            print(f"\n[Step 5/{total_steps}] Skipped (use --burn to embed subtitles in video)")
+            print(f"\n[Step {burn_step}/{total_steps}] Burning subtitles/text overlay into video...")
 
+            if ocr_overlays:
+                burn_with_overlays(
+                    args.input, ocr_overlays, output_video,
+                    srt_path=srt_path if args.burn else None,
+                )
+            elif args.burn and ocr_filter:
+                burn_subtitles(args.input, srt_path, output_video, ocr_filter=ocr_filter)
+            elif args.burn:
+                burn_subtitles(args.input, srt_path, output_video)
+            elif ocr_filter:
+                burn_ocr_overlay(args.input, ocr_filter, output_video)
+        else:
+            print(f"\n[Step {burn_step}/{total_steps}] Skipped (use --burn to embed subtitles in video)")
+            output_video = None
+
+        # Cleanup
         _cleanup(wav_path)
+        for temp_dir in ["_ocr_frames", "_ocr_overlays", "_tts_temp"]:
+            temp_path = os.path.join(output_dir, temp_dir)
+            if os.path.isdir(temp_path):
+                shutil.rmtree(temp_path, ignore_errors=True)
+
         elapsed = time.time() - start_time
         print(f"\nDone! ({elapsed:.1f}s)")
         print(f"  SRT file: {srt_path}")
-        if args.burn:
+        if output_video and (args.burn or has_ocr_work):
             print(f"  Video: {output_video}")
         return
 
     # --- Dubbing pipeline ---
 
-    # Step 5: Generate TTS + speed adjust
     video_ext = os.path.splitext(args.input)[1]
+
+    # Guard: skip dub if no speech segments detected
+    if not translated_segments:
+        tts_step = burn_step
+        print(f"\n[Step {tts_step}/{total_steps}] No speech segments detected, skipping dubbing.")
+        # Still handle OCR overlay if present
+        has_ocr_work = ocr_filter or ocr_overlays
+        if has_ocr_work:
+            output_video = os.path.join(output_dir, f"{video_base}.{target_lang}{video_ext}")
+            print(f"  Burning OCR text overlay...")
+            if ocr_overlays:
+                burn_with_overlays(args.input, ocr_overlays, output_video)
+            elif ocr_filter:
+                burn_ocr_overlay(args.input, ocr_filter, output_video)
+            print(f"  Output: {output_video}")
+
+        _cleanup(wav_path)
+        for temp_dir in ["_tts_temp", "_ocr_frames", "_ocr_overlays"]:
+            temp_path = os.path.join(output_dir, temp_dir)
+            if os.path.isdir(temp_path):
+                shutil.rmtree(temp_path, ignore_errors=True)
+        elapsed = time.time() - start_time
+        print(f"\nDone! ({elapsed:.1f}s)")
+        print(f"  SRT file: {srt_path}")
+        return
+
+    # Step: Generate TTS + speed adjust
+    tts_step = burn_step
     dubbed_audio_path = os.path.join(output_dir, f"{video_base}.{target_lang}.dubbed.m4a")
-    print(f"\n[Step 5/{total_steps}] Generating TTS audio...")
+    print(f"\n[Step {tts_step}/{total_steps}] Generating TTS audio...")
     build_dubbed_audio(
         translated_segments,
         lang=target_lang,
@@ -151,30 +269,46 @@ def main():
         custom_voice=args.tts_voice,
     )
 
-    # Step 6: Merge dubbed audio into video
+    # Step: Merge dubbed audio into video
+    merge_step = tts_step + 1
     output_video = os.path.join(output_dir, f"{video_base}.{target_lang}.dubbed{video_ext}")
-    print(f"\n[Step 6/{total_steps}] Merging dubbed audio into video...")
+    print(f"\n[Step {merge_step}/{total_steps}] Merging dubbed audio into video...")
     dub_video(args.input, dubbed_audio_path, output_video)
 
-    # Step 7: Burn subtitles into dubbed video (optional)
-    if args.burn:
+    # Step: Burn subtitles / OCR into dubbed video (optional)
+    final_step = merge_step + 1
+    has_ocr_work = ocr_filter or ocr_overlays
+    burned_video = None
+    if args.burn or has_ocr_work:
         burned_video = os.path.join(output_dir, f"{video_base}.{target_lang}.dubbed.subbed{video_ext}")
-        print(f"\n[Step 7/{total_steps}] Burning subtitles into dubbed video...")
-        burn_subtitles(output_video, srt_path, burned_video)
+        print(f"\n[Step {final_step}/{total_steps}] Burning subtitles/text overlay into dubbed video...")
+
+        if ocr_overlays:
+            burn_with_overlays(
+                output_video, ocr_overlays, burned_video,
+                srt_path=srt_path if args.burn else None,
+            )
+        elif args.burn and ocr_filter:
+            burn_subtitles(output_video, srt_path, burned_video, ocr_filter=ocr_filter)
+        elif args.burn:
+            burn_subtitles(output_video, srt_path, burned_video)
+        elif ocr_filter:
+            burn_ocr_overlay(output_video, ocr_filter, burned_video)
     else:
-        print(f"\n[Step 7/{total_steps}] Skipped (use --burn to also embed subtitles)")
+        print(f"\n[Step {final_step}/{total_steps}] Skipped (use --burn to also embed subtitles)")
 
     # Cleanup
     _cleanup(wav_path)
-    tts_temp = os.path.join(output_dir, "_tts_temp")
-    if os.path.isdir(tts_temp):
-        shutil.rmtree(tts_temp, ignore_errors=True)
+    for temp_dir in ["_tts_temp", "_ocr_frames", "_ocr_overlays"]:
+        temp_path = os.path.join(output_dir, temp_dir)
+        if os.path.isdir(temp_path):
+            shutil.rmtree(temp_path, ignore_errors=True)
 
     elapsed = time.time() - start_time
     print(f"\nDone! ({elapsed:.1f}s)")
     print(f"  SRT file: {srt_path}")
     print(f"  Dubbed video: {output_video}")
-    if args.burn:
+    if burned_video:
         print(f"  Dubbed + subtitled: {burned_video}")
 
 

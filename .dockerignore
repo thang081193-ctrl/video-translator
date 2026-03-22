@@ -1,0 +1,8 @@
+uploads/
+*.log
+.env
+.git/
+.claude/
+__pycache__/
+_test_*
+*.pyc

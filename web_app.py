@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import traceback
@@ -36,7 +37,7 @@ from pipeline.audio import extract_audio, extract_audio_hq, get_video_info, chec
 from pipeline.transcribe import transcribe
 from pipeline.translate import translate_segments
 from pipeline.subtitle import generate_srt
-from pipeline.burn import burn_subtitles, burn_ocr_overlay
+from pipeline.burn import burn_subtitles, burn_ocr_overlay, burn_with_overlays
 from pipeline.dub import build_dubbed_audio, dub_video, DEFAULT_VOICES
 
 import queue as _queue
@@ -61,6 +62,62 @@ _logger.setLevel(logging.DEBUG)
 _fh = logging.FileHandler(_log_path, encoding="utf-8")
 _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 _logger.addHandler(_fh)
+
+# Upload size limit (100MB — matches Cloudflare Free tunnel limit)
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024
+
+# Track last activity for auto-stop
+_last_activity = time.time()
+
+# Auto-stop idle timeout (seconds) — only active when CONTAINER_ID is set
+_IDLE_TIMEOUT = 90 * 60  # 90 minutes
+
+
+def _cleanup_old_jobs():
+    """Delete job files and records older than 24 hours."""
+    cutoff = time.time() - 86400
+    for job_id in list(jobs.keys()):
+        job = jobs[job_id]
+        if job["status"] in ("queued", "running"):
+            continue
+        job_dir = os.path.join(UPLOAD_DIR, job_id)
+        if os.path.isdir(job_dir):
+            try:
+                if os.path.getmtime(job_dir) < cutoff:
+                    shutil.rmtree(job_dir, ignore_errors=True)
+                    del jobs[job_id]
+                    _logger.info(f"Cleaned up old job {job_id}")
+            except OSError:
+                pass
+
+
+def _auto_stop_checker():
+    """Background thread: stop Vast.ai instance after idle timeout."""
+    global _last_activity
+    while True:
+        time.sleep(300)  # check every 5 minutes
+        # Run cleanup every cycle
+        try:
+            _cleanup_old_jobs()
+        except Exception as e:
+            _logger.error(f"Cleanup error: {e}")
+        # Check idle timeout (only on Vast.ai)
+        cid = os.environ.get("CONTAINER_ID")
+        api_key = os.environ.get("CONTAINER_API_KEY")
+        if cid and api_key and (time.time() - _last_activity) > _IDLE_TIMEOUT:
+            _logger.info(f"Idle for >{_IDLE_TIMEOUT // 60}min, stopping instance {cid}")
+            try:
+                subprocess.run(
+                    ["vastai", "stop", "instance", cid, "--api-key", api_key],
+                    capture_output=True, timeout=30,
+                )
+            except Exception as e:
+                _logger.error(f"Auto-stop failed: {e}")
+
+
+# Start background maintenance thread
+_maintenance_thread = threading.Thread(target=_auto_stop_checker, daemon=True)
+_maintenance_thread.start()
 
 
 # ─── API routes ────────────────────────────────────────────────────────────────
@@ -109,21 +166,38 @@ async def start_translation(
     audio_mode: str = Form(default="keep_original_bgm"),
     bgm_volume: float = Form(default=0.25),
     translate_ocr: str = Form(default="false"),
+    ocr_quality: str = Form(default="fast"),
 ):
     """Upload video and start a translation job."""
     # Parse booleans from form strings
     burn = _parse_bool(burn)
     dub = _parse_bool(dub)
     translate_ocr = _parse_bool(translate_ocr)
+    # Validate inputs
+    if ocr_quality not in ("fast", "quality", "premium"):
+        ocr_quality = "fast"
+    batch_size = max(1, batch_size)
+    bgm_volume = max(0.05, min(1.0, bgm_volume))
     job_id = str(uuid.uuid4())[:8]
     job_dir = os.path.join(UPLOAD_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
 
-    # Save uploaded video
+    # Save uploaded video (stream-based size check)
     video_filename = video.filename or "video.mp4"
     video_path = os.path.join(job_dir, video_filename)
+    written = 0
     with open(video_path, "wb") as f:
-        shutil.copyfileobj(video.file, f)
+        while chunk := await video.read(1024 * 1024):  # 1MB chunks
+            written += len(chunk)
+            if written > MAX_UPLOAD_SIZE:
+                f.close()
+                os.remove(video_path)
+                shutil.rmtree(job_dir, ignore_errors=True)
+                return JSONResponse(
+                    {"error": f"File exceeds {MAX_UPLOAD_SIZE // (1024*1024)}MB limit"},
+                    status_code=413,
+                )
+            f.write(chunk)
 
     # Save BGM if provided
     bgm_path = None
@@ -161,7 +235,7 @@ async def start_translation(
     _job_queue.put((
         job_id, video_path, target_lang, source_lang or None,
         whisper_model, burn, dub, bgm_path, tts_voice or None, batch_size,
-        audio_mode, bgm_volume, translate_ocr,
+        audio_mode, bgm_volume, translate_ocr, ocr_quality,
     ))
     _ensure_worker()
 
@@ -221,7 +295,9 @@ async def get_status(job_id: str):
 
 @app.get("/api/debug")
 async def debug_info():
-    """Debug endpoint to check worker status."""
+    """Debug endpoint to check worker status (disabled in production)."""
+    if os.environ.get("PRODUCTION"):
+        return JSONResponse({"error": "disabled"}, status_code=403)
     return {
         "worker_alive": _worker_thread is not None and _worker_thread.is_alive(),
         "queue_size": _job_queue.qsize(),
@@ -268,6 +344,7 @@ def _run_pipeline(
     audio_mode: str = "keep_original_bgm",
     bgm_volume: float = 0.25,
     translate_ocr: bool = False,
+    ocr_quality: str = "fast",
 ):
     try:
         job_dir = os.path.dirname(video_path)
@@ -295,23 +372,25 @@ def _run_pipeline(
         # Step 3: Translate
         current_step += 1
         cache_path = os.path.join(job_dir, f"{video_base}.{src_lang}_{target_lang}.translated.json")
-        _update(job_id, step=current_step, step_label=f"Translating {src_lang} → {target_lang}", progress=50)
+        _update(job_id, step=current_step, step_label=f"Translating {src_lang} -> {target_lang}", progress=50)
         translated_segments = translate_segments(
             segments, source_lang=src_lang, target_lang=target_lang,
             batch_size=batch_size, cache_path=cache_path, use_cache=True,
         )
         _update(job_id, progress=65)
 
-        # Step 3.5 (optional): OCR
+        # Step 3.5 (optional): OCR — quality modes: fast / quality / premium
         ocr_filter = None
+        ocr_overlays = None  # list of overlay dicts for quality/premium modes
         if translate_ocr:
             current_step += 1
             _update(job_id, step=current_step, step_label="Detecting on-screen text (OCR)", progress=67)
             try:
                 from pipeline.ocr import (
                     extract_key_frames, detect_text_regions,
-                    group_persistent_texts, translate_ocr_texts,
-                    generate_drawtext_filter,
+                    group_persistent_texts, group_persistent_texts_tracked,
+                    translate_ocr_texts, generate_drawtext_filter,
+                    generate_overlay_images, inpaint_all_regions,
                 )
 
                 video_info = get_video_info(video_path)
@@ -321,18 +400,50 @@ def _run_pipeline(
                 _update(job_id, step_label="Running OCR...", progress=69)
                 frame_results = detect_text_regions(key_frames, lang=src_lang)
 
-                text_groups = group_persistent_texts(frame_results)
+                # Group texts — use Kalman tracking for premium mode
+                if ocr_quality == "premium":
+                    text_groups = group_persistent_texts_tracked(frame_results)
+                else:
+                    text_groups = group_persistent_texts(frame_results)
 
                 if text_groups:
                     _update(job_id, step_label="Translating on-screen text...", progress=72)
                     text_groups = translate_ocr_texts(text_groups, src_lang, target_lang)
-                    ocr_filter = generate_drawtext_filter(
-                        text_groups, video_info["width"], video_info["height"], target_lang
-                    )
 
-                shutil.rmtree(frames_dir, ignore_errors=True)
-            except ImportError:
-                print("  OCR module not available, skipping...")
+                    # ffmpeg drawtext cannot render Vietnamese/diacritics — auto-upgrade
+                    _DRAWTEXT_UNSAFE_LANGS = {"vi", "fr", "es", "de", "pt", "it", "ru", "th", "hi", "ar"}
+                    if ocr_quality == "fast" and target_lang in _DRAWTEXT_UNSAFE_LANGS:
+                        _logger.info(f"Auto-upgrading OCR quality fast->quality for lang={target_lang}")
+                        ocr_quality = "quality"
+
+                    if ocr_quality == "fast":
+                        # Phase 1: ffmpeg drawtext (ASCII/CJK only — no diacritics)
+                        ocr_filter = generate_drawtext_filter(
+                            text_groups, video_info["width"], video_info["height"], target_lang
+                        )
+                    elif ocr_quality == "quality":
+                        # Phase 2: Pillow overlay PNGs (better style, centering, word-wrap)
+                        _update(job_id, step_label="Rendering text overlays...", progress=73)
+                        ocr_overlays = generate_overlay_images(
+                            text_groups, video_info["width"], video_info["height"],
+                            job_dir, target_lang
+                        )
+                    elif ocr_quality == "premium":
+                        # Phase 3: Inpaint + overlay (best quality, removes original text cleanly)
+                        _update(job_id, step_label="Inpainting text regions...", progress=73)
+                        inpaint_patches = inpaint_all_regions(video_path, text_groups, frames_dir)
+                        _update(job_id, step_label="Rendering text overlays...", progress=74)
+                        ocr_overlays = generate_overlay_images(
+                            text_groups, video_info["width"], video_info["height"],
+                            job_dir, target_lang, inpaint_patches=inpaint_patches,
+                        )
+
+                # Don't delete frames_dir yet if we still need it for inpainting
+                if ocr_quality != "premium":
+                    shutil.rmtree(frames_dir, ignore_errors=True)
+            except ImportError as e:
+                _logger.warning(f"OCR module not available: {e}")
+                print(f"  OCR module not available ({e}), skipping...")
             _update(job_id, progress=75)
 
         # Step 4: Generate SRT
@@ -400,14 +511,24 @@ def _run_pipeline(
 
         # Step: Burn subtitles / OCR overlay
         current_step += 1
-        has_burn_work = (burn and has_segments) or ocr_filter
+        has_burn_work = (burn and has_segments) or ocr_filter or ocr_overlays
         if has_burn_work:
             final_video = os.path.join(job_dir, f"{video_base}.{target_lang}.final{video_ext}")
             _update(job_id, step=current_step, step_label="Burning subtitles/text overlay", progress=93)
-            if burn and has_segments:
+
+            if ocr_overlays:
+                # Quality/Premium mode: use overlay PNGs
+                burn_with_overlays(
+                    base_video, ocr_overlays, final_video,
+                    srt_path=srt_path if (burn and has_segments) else None,
+                )
+            elif burn and has_segments:
+                # Fast mode with subtitles (+ optional drawtext OCR filter)
                 burn_subtitles(base_video, srt_path, final_video, ocr_filter=ocr_filter)
             elif ocr_filter:
+                # Fast mode OCR only (no subtitles)
                 burn_ocr_overlay(base_video, ocr_filter, final_video)
+
             label = "Dubbed + Subtitles" if can_dub else "Video with text overlay"
             result_files.append({"name": os.path.basename(final_video), "type": "video", "label": label})
         else:
@@ -418,15 +539,20 @@ def _run_pipeline(
             os.remove(wav_path)
         except OSError:
             pass
-        for temp_dir in ["_tts_temp", "_demucs_temp", "_ocr_frames"]:
+        for temp_dir in ["_tts_temp", "_demucs_temp", "_ocr_frames", "_ocr_overlays"]:
             temp_path = os.path.join(job_dir, temp_dir)
             if os.path.isdir(temp_path):
                 shutil.rmtree(temp_path, ignore_errors=True)
 
+        global _last_activity
+        _last_activity = time.time()
         _update(job_id, status="done", step=total_steps, step_label="Complete",
                 progress=100, files=result_files)
 
     except Exception as e:
+        import traceback as _tb
+        tb_str = _tb.format_exc()
+        _logger.error(f"Job {job_id} pipeline error: {e}\n{tb_str}")
         _update(job_id, status="error", error=str(e))
 
 
