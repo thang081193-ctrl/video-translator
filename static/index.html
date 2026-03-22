@@ -564,7 +564,7 @@ body {
     <div class="card-title">
       <span class="material-icons-outlined">cloud_upload</span>
       Upload videos
-      <span style="font-size:13px; color:var(--grey-600); font-weight:400; margin-left:8px;">(up to 5 files)</span>
+      <span style="font-size:13px; color:var(--grey-600); font-weight:400; margin-left:8px;">(up to 30 files)</span>
     </div>
     <div class="upload-area" id="uploadArea">
       <span class="material-icons-outlined">video_file</span>
@@ -733,6 +733,10 @@ body {
       <span class="label" id="progressLabel">Starting...</span>
       <span class="percent" id="progressPercent">0%</span>
     </div>
+    <div class="progress-status" style="margin-top:8px;">
+      <span class="label" id="etaLabel" style="font-size:13px;"></span>
+      <span class="percent" id="idleNote" style="font-size:12px; color:var(--grey-500);"></span>
+    </div>
   </div>
 
   <!-- Results Card -->
@@ -805,13 +809,15 @@ const resultsCard = $('resultsCard');
 const resultsList = $('resultsList');
 const uploadCard = $('uploadCard');
 const settingsCard = $('settingsCard');
+const etaLabel = $('etaLabel');
+const idleNote = $('idleNote');
 
 let selectedVideos = [];  // array of File objects
 let selectedBgm = null;
 let batchJobs = [];  // [{file, jobId, status, files}]
 let pollTimer = null;
-
-const MAX_FILES = 5;
+let batchStartTime = null;
+const MAX_FILES = 30;
 
 // ─── Load languages ───────────────────────────────────────────────
 fetch('/api/languages').then(r => r.json()).then(data => {
@@ -951,6 +957,7 @@ submitBtn.addEventListener('click', async () => {
 
   // Upload all videos — create one job per video
   batchJobs = selectedVideos.map(f => ({ file: f, jobId: null, status: 'uploading', data: null }));
+  batchStartTime = Date.now();
   showProgress();
 
   for (let i = 0; i < batchJobs.length; i++) {
@@ -1069,6 +1076,18 @@ function updateCurrentJobProgress(data) {
   const prefix = totalJobs > 1 ? `[${doneJobs + 1}/${totalJobs}] ` : '';
   progressLabel.textContent = prefix + step_label;
   progressPercent.textContent = overallPct + '%';
+
+  // ETA calculation
+  if (batchStartTime && overallPct > 2) {
+    const elapsed = (Date.now() - batchStartTime) / 1000;
+    const remaining = (elapsed / overallPct) * (100 - overallPct);
+    if (remaining > 0 && remaining < 36000) {
+      const mins = Math.floor(remaining / 60);
+      const secs = Math.floor(remaining % 60);
+      etaLabel.textContent = mins > 0 ? `~${mins}m ${secs}s remaining` : `~${secs}s remaining`;
+    }
+  }
+  idleNote.textContent = 'GPU auto-stops after 90min idle';
 }
 
 function startBatchPolling() {
@@ -1095,6 +1114,8 @@ function startBatchPolling() {
       clearInterval(pollTimer);
       pollTimer = null;
       progressBar.classList.remove('animated');
+      etaLabel.textContent = '';
+      idleNote.textContent = '';
       showBatchResults();
     }
   }, 1000);
