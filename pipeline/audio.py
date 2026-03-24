@@ -31,11 +31,11 @@ def has_audio_track(video_path: str) -> bool:
                 "-select_streams", "a",
                 video_path,
             ],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, timeout=30,
         )
         data = json.loads(result.stdout)
         return len(data.get("streams", [])) > 0
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
+    except (subprocess.CalledProcessError, json.JSONDecodeError, subprocess.TimeoutExpired):
         return False
 
 
@@ -70,7 +70,7 @@ def extract_audio(video_path: str, output_dir: str | None = None) -> str:
             "-ac", "1",
             wav_path,
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=300,
     )
 
     return wav_path
@@ -100,7 +100,7 @@ def extract_audio_hq(video_path: str, output_dir: str | None = None) -> str:
             "-ac", "2",
             wav_path,
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=300,
     )
 
     return wav_path
@@ -116,7 +116,7 @@ def get_video_info(video_path: str) -> dict:
             "-select_streams", "v:0",
             video_path,
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=300,
     )
     data = json.loads(result.stdout)
     stream = data["streams"][0]

@@ -76,12 +76,24 @@ def separate_audio(audio_path: str, output_dir: str, model: str = "htdemucs") ->
 
     try:
         from demucs.separate import main as demucs_main
-        demucs_main([
-            "--two-stems", "vocals",
-            "-n", model,
-            "-o", demucs_out,
-            audio_path,
-        ])
+        try:
+            demucs_main([
+                "--two-stems", "vocals",
+                "-n", model,
+                "-o", demucs_out,
+                audio_path,
+            ])
+        except RuntimeError:
+            print("  GPU OOM during Demucs, retrying on CPU...")
+            import torch
+            torch.cuda.empty_cache()
+            demucs_main([
+                "--two-stems", "vocals",
+                "-n", model,
+                "-d", "cpu",
+                "-o", demucs_out,
+                audio_path,
+            ])
     finally:
         torchaudio.save = _original_save
 
@@ -103,7 +115,7 @@ def get_audio_duration(path: str) -> float:
             "-show_entries", "format=duration",
             path,
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=300,
     )
     data = json.loads(result.stdout)
     return float(data["format"]["duration"])
@@ -156,7 +168,7 @@ def adjust_speed(input_path: str, target_duration: float, output_path: str) -> s
             "-c:a", "pcm_s16le",
             output_path,
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=300,
     )
     return output_path
 
@@ -172,7 +184,7 @@ def _generate_silence(duration: float, output_path: str):
             "-c:a", "pcm_s16le",
             output_path,
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=300,
     )
 
 
@@ -237,8 +249,15 @@ def build_dubbed_audio(
             sem = asyncio.Semaphore(5)  # limit concurrent requests
             async def _one(text, voice, path):
                 async with sem:
-                    c = edge_tts.Communicate(text, voice)
-                    await c.save(path)
+                    for attempt in range(3):
+                        try:
+                            c = edge_tts.Communicate(text, voice)
+                            await asyncio.wait_for(c.save(path), timeout=30)
+                            return
+                        except (asyncio.TimeoutError, Exception) as e:
+                            if attempt == 2:
+                                raise RuntimeError(f"TTS failed after 3 retries: {e}")
+                            await asyncio.sleep(1 * (attempt + 1))
             await asyncio.gather(*[
                 _one(t[4], voice, t[5]) for t in tts_tasks
             ])
@@ -303,7 +322,7 @@ def build_dubbed_audio(
             "-ac", "1",
             dubbed_raw,
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=300,
     )
 
     # Step 3: Mix with background music
@@ -342,7 +361,7 @@ def build_dubbed_audio(
             "-c:a", "aac", "-b:a", "192k",
             output_path,
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=300,
     )
 
     # Cleanup demucs temp
@@ -393,7 +412,7 @@ def dub_video(video_path: str, audio_path: str, output_path: str) -> str:
             "-map", "1:a:0",
             output_path,
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=300,
     )
 
     # Cleanup padded file

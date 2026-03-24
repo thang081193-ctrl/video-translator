@@ -80,7 +80,7 @@ def burn_subtitles(video_path: str, srt_path: str, output_path: str | None = Non
     cmd = _build_ffmpeg_cmd(video_path, output_path, vf_string, output_dir)
 
     print(f"  Burning subtitles into video...")
-    subprocess.run(cmd, capture_output=True, text=True, check=True)
+    subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
 
     print(f"  Output video: {output_path}")
     return output_path
@@ -99,7 +99,7 @@ def burn_ocr_overlay(video_path: str, ocr_filter: str, output_path: str):
     cmd = _build_ffmpeg_cmd(video_path, output_path, ocr_filter, output_dir)
 
     print(f"  Burning OCR text overlay into video...")
-    subprocess.run(cmd, capture_output=True, text=True, check=True)
+    subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
 
     print(f"  Output video: {output_path}")
     return output_path
@@ -189,7 +189,7 @@ def burn_with_overlays(
     cmd += ["-map", f"{final_label}", "-map", "0:a", "-crf", "18", "-preset", "medium", output_path]
 
     print(f"  Burning {n} overlay(s) into video...")
-    subprocess.run(cmd, capture_output=True, text=True, check=True)
+    subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
 
     print(f"  Output video: {output_path}")
     return output_path

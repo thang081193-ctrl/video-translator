@@ -180,7 +180,7 @@ def extract_key_frames(
     result = subprocess.run(
         ["ffprobe", "-v", "quiet", "-print_format", "json",
          "-show_entries", "format=duration", video_path],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=120,
     )
     duration = float(json.loads(result.stdout)["format"]["duration"])
 
@@ -193,7 +193,7 @@ def extract_key_frames(
             "-qscale:v", "2",
             os.path.join(output_dir, "frame_%04d.jpg"),
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=120,
     )
 
     # Build frame list with timestamps

@@ -47,13 +47,17 @@ app = FastAPI(title="Video Translator")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# In-memory job store
+# In-memory job store (protected by _jobs_lock)
 jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
 
 # Sequential job queue — process one video at a time to avoid OOM
 _job_queue: _queue.Queue = _queue.Queue()
 _worker_thread: threading.Thread | None = None
 _worker_lock = threading.Lock()
+
+# Per-job timeout (seconds) — kills pipeline if stuck
+_JOB_TIMEOUT = 30 * 60  # 30 minutes
 
 # File-based logging for worker thread (stdout may be devnull on pythonw)
 _log_path = os.path.join(os.path.dirname(__file__), "worker.log")
@@ -264,9 +268,16 @@ def _worker_loop():
         job_id = args[0]
         try:
             _logger.info(f"Processing job {job_id}")
-            _run_pipeline(*args)
-            final_status = jobs.get(job_id, {}).get("status", "unknown")
-            _logger.info(f"Job {job_id} finished — status={final_status}")
+            # Run pipeline in a sub-thread with timeout
+            pipeline_thread = threading.Thread(target=_run_pipeline, args=args, daemon=True)
+            pipeline_thread.start()
+            pipeline_thread.join(timeout=_JOB_TIMEOUT)
+            if pipeline_thread.is_alive():
+                _logger.error(f"Job {job_id} timed out after {_JOB_TIMEOUT}s")
+                _update(job_id, status="error", error=f"Job timed out after {_JOB_TIMEOUT // 60} minutes")
+            else:
+                final_status = jobs.get(job_id, {}).get("status", "unknown")
+                _logger.info(f"Job {job_id} finished — status={final_status}")
         except BaseException as e:
             tb = traceback.format_exc()
             _logger.error(f"Job {job_id} failed: {e}\n{tb}")
@@ -278,19 +289,20 @@ def _worker_loop():
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
     """Poll job status."""
-    job = jobs.get(job_id)
-    if not job:
-        return JSONResponse({"error": "Job not found"}, status_code=404)
-    return {
-        "id": job["id"],
-        "status": job["status"],
-        "step": job["step"],
-        "total_steps": job["total_steps"],
-        "step_label": job["step_label"],
-        "progress": job["progress"],
-        "error": job["error"],
-        "files": job["files"],
-    }
+    with _jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            return JSONResponse({"error": "Job not found"}, status_code=404)
+        return {
+            "id": job["id"],
+            "status": job["status"],
+            "step": job["step"],
+            "total_steps": job["total_steps"],
+            "step_label": job["step_label"],
+            "progress": job["progress"],
+            "error": job["error"],
+            "files": list(job["files"]),
+        }
 
 
 @app.get("/api/debug")
@@ -325,9 +337,10 @@ async def download_file(job_id: str, filename: str):
 # ─── Pipeline runner ───────────────────────────────────────────────────────────
 
 def _update(job_id: str, **kwargs):
-    job = jobs.get(job_id)
-    if job:
-        job.update(kwargs)
+    with _jobs_lock:
+        job = jobs.get(job_id)
+        if job:
+            job.update(kwargs)
 
 
 def _run_pipeline(
