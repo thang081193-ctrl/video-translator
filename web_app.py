@@ -547,6 +547,11 @@ def _run_pipeline(
         else:
             _update(job_id, step=current_step, step_label="Finalizing", progress=95)
 
+        # If no output files were generated, include the original video
+        if not result_files:
+            result_files.append({"name": os.path.basename(video_path), "type": "video",
+                                 "label": "Original video (no speech detected)"})
+
         # Cleanup
         try:
             os.remove(wav_path)

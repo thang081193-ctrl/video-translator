@@ -1131,7 +1131,7 @@ function showBatchResults() {
 
   let html = '';
   for (const bj of batchJobs) {
-    if (bj.status === 'done' && bj.data && bj.data.files) {
+    if (bj.status === 'done' && bj.data && bj.data.files && bj.data.files.length > 0) {
       if (batchJobs.length > 1) {
         html += `<div style="font-weight:600; font-size:14px; margin:16px 0 8px; color:var(--grey-800);">
           <span class="material-icons-outlined" style="font-size:16px;vertical-align:-3px;color:var(--green-600);">check_circle</span>
@@ -1149,6 +1149,11 @@ function showBatchResults() {
           </a>
         </div>`;
       });
+    } else if (bj.status === 'done') {
+      html += `<div style="font-weight:500; font-size:14px; margin:16px 0 8px; color:var(--grey-700);">
+        <span class="material-icons-outlined" style="font-size:16px;vertical-align:-3px;color:var(--yellow-600);">info</span>
+        ${bj.file.name} — No speech detected
+      </div>`;
     } else if (bj.status === 'error') {
       html += `<div style="font-weight:600; font-size:14px; margin:16px 0 4px; color:var(--red-600, #d93025);">
         <span class="material-icons-outlined" style="font-size:16px;vertical-align:-3px;">error</span>
