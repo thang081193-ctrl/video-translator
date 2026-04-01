@@ -13,8 +13,11 @@ if user_site not in sys.path:
 import web_app  # noqa: trigger module-level startup
 import uvicorn
 
+import os
+
 from pipeline.audio import check_ffmpeg
 check_ffmpeg()
+port = int(os.environ.get("PORT", 8000))
 print("\n  Video Translator Web UI")
-print("  http://localhost:8000\n")
-uvicorn.run(web_app.app, host="0.0.0.0", port=8000)
+print(f"  http://localhost:{port}\n")
+uvicorn.run(web_app.app, host="0.0.0.0", port=port)
