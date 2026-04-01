@@ -553,7 +553,7 @@ body {
   <div class="topbar-icon">
     <span class="material-icons-outlined">translate</span>
   </div>
-  <h1>Video Translator <span>Whisper + Gemini AI</span></h1>
+  <h1>Video Translator <span>Whisper + Grok AI</span></h1>
 </header>
 
 <!-- ─── Main Content ─────────────────────────────────────────────── -->
@@ -741,12 +741,12 @@ body {
 
   <!-- Results Card -->
   <div class="card results-card" id="resultsCard">
-    <div style="text-align:center; margin-bottom: 24px;">
-      <div class="success-icon">
+    <div style="text-align:center; margin-bottom: 24px;" id="resultsHeader">
+      <div class="success-icon" id="resultsIcon">
         <span class="material-icons-outlined">check_circle</span>
       </div>
-      <div class="card-title" style="justify-content:center; margin-bottom: 4px;">Translation complete</div>
-      <p style="color:var(--grey-700); font-size:14px;">Your files are ready to download</p>
+      <div class="card-title" style="justify-content:center; margin-bottom: 4px;" id="resultsTitle">Translation complete</div>
+      <p style="color:var(--grey-700); font-size:14px;" id="resultsSubtitle">Your files are ready to download</p>
     </div>
 
     <div id="resultsList"></div>
@@ -1128,6 +1128,35 @@ function showBatchResults() {
 
   const doneCount = batchJobs.filter(j => j.status === 'done').length;
   const errCount = batchJobs.filter(j => j.status === 'error').length;
+  const totalCount = batchJobs.length;
+  const resultsIcon = $('resultsIcon');
+  const resultsTitle = $('resultsTitle');
+  const resultsSubtitle = $('resultsSubtitle');
+
+  if (errCount === totalCount) {
+    // All jobs failed
+    resultsIcon.style.background = 'var(--red-50)';
+    resultsIcon.style.color = 'var(--red-600)';
+    resultsIcon.innerHTML = '<span class="material-icons-outlined">error_outline</span>';
+    resultsTitle.textContent = 'Translation failed';
+    resultsSubtitle.textContent = totalCount > 1
+      ? `All ${totalCount} jobs failed. Check errors below.`
+      : 'An error occurred during translation. See details below.';
+  } else if (errCount > 0) {
+    // Partial failures
+    resultsIcon.style.background = '#fff8e1';
+    resultsIcon.style.color = 'var(--yellow-600)';
+    resultsIcon.innerHTML = '<span class="material-icons-outlined">warning</span>';
+    resultsTitle.textContent = 'Partially complete';
+    resultsSubtitle.textContent = `${doneCount} succeeded, ${errCount} failed`;
+  } else {
+    // All success
+    resultsIcon.style.background = 'var(--green-50)';
+    resultsIcon.style.color = 'var(--green-600)';
+    resultsIcon.innerHTML = '<span class="material-icons-outlined">check_circle</span>';
+    resultsTitle.textContent = 'Translation complete';
+    resultsSubtitle.textContent = 'Your files are ready to download';
+  }
 
   let html = '';
   for (const bj of batchJobs) {
