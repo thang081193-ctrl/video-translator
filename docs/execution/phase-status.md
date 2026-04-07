@@ -61,21 +61,64 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`, `Done w/ Excepti
 
 ## 6) Session Kickoff Checklist (Copy To New Session)
 ```text
-1) Read docs/execution/phase-status.md
-2) Read latest file in docs/execution/reports/
-3) Read .claude/skills/dev-standards.md
-4) Read .claude/skills/architecture-rules.md
-5) Execute only current phase scope
-6) Run regression checks after code changes
-7) Write phase report using docs/execution/phase-report-template.md
-8) Update phase-status.md before ending session
+1) git pull origin main  (must be at d63aa0c or later)
+2) Read .claude/handoff-phase-3-4.md  (full session summary)
+3) Read docs/execution/phase-status.md  (this file)
+4) Read .claude/skills/phase-workflow.md  (5 mandatory gates)
+5) Read .claude/skills/dev-standards.md  (3 pillars)
+6) Read .claude/skills/architecture-rules.md  (7 rules + Rule 3a/3b)
+7) Run pytest tests/ -v  (expect 337 passed)
+8) Execute only current phase scope
+9) Write phase report using docs/execution/phase-report-template.md
+10) Update phase-status.md before ending session
 ```
 
-## 7) Handoff Notes
-- Pipeline entry points: `video_translator.py` (CLI), `web_app.py` (FastAPI Web UI)
+## 7) Next Session Priorities (from .claude/handoff-phase-3-4.md)
+
+### P0 — Verification on new machine
+- [ ] git pull → at d63aa0c
+- [ ] pip install -r requirements.txt -r requirements-dev.txt
+- [ ] pytest tests/ → 337 passed
+- [ ] python web_app.py → http://localhost:3456 → 30 langs in dropdown
+- [ ] grep _DRAWTEXT_UNSAFE → 0 results (drift check)
+
+### P1 — Vast.ai deployment update
+- [ ] git pull on Vast.ai instance
+- [ ] Verify Noto fonts: dpkg -l | grep fonts-noto
+- [ ] Restart server, smoke test 1-2 new langs (bn, tr) end-to-end
+
+### P2 — Pick ONE feature direction (Phase 5):
+**Option A — Tech debt cleanup** (low risk, high quality):
+- P5.0: TempDir migration (dub/ocr modules)
+- P5.1: Custom exception adoption (replace RuntimeError/ValueError)
+- P5.2: Retry decorator adoption (replace inline retry loops)
+- P5.3: Fix has_audio_track silent failure
+- P5.4: Write phase reports for P3/P4 to docs/execution/reports/
+
+**Option B — New features**:
+- YouTube URL support (yt-dlp integration) — Medium effort
+- Batch processing (folder upload) — Medium effort
+- Dual subtitles (orig + translated) — Low effort
+- Speaker diarization (pyannote-audio) — High effort
+- Voice cloning (ElevenLabs) — Medium effort, paid API
+- Real-time progress (WebSocket) — Medium effort
+
+## 8) Known Issues / Tech Debt
+- `pipeline/audio.py:23-39` — `has_audio_track()` silently returns False on ANY ffprobe error (P3.5 miss; documented in test_audio_edge.py)
+- `pipeline/dub/mixer.py`, `pipeline/ocr/detector.py` — still use raw `os.makedirs("_temp")` instead of `temp_dir()` context manager
+- `pipeline/translate.py` — uses inline retry loop instead of `@retry` decorator
+- All pipeline modules — still raise `RuntimeError`/`ValueError` instead of `TransientError`/`FatalError`/`DegradedError`
+- `docs/execution/reports/` — empty (phase reports not written)
+- Old GitHub PAT exposed in this session — bro should revoke at https://github.com/settings/tokens
+
+## 9) Handoff Notes
+- Pipeline entry points: `video_translator.py` (CLI), `web_app.py` (Web, ~40 LOC thin entry)
+- Shared logic: `web/pipeline_runner.py` (used by both CLI and Web)
 - Deployment: Docker + NVIDIA CUDA 12.3 on Vast.ai GPU instances
-- API providers: Grok (primary), Gemini, Vertex AI — keys in `.env`
-- TTS: edge-tts (free Microsoft voices, 322+ voices)
-- OCR: EasyOCR + Pillow overlay rendering
+- API providers: Grok (primary), Gemini, Vertex — keys in `.env`, loaded by `pipeline/providers/factory.py`
+- TTS: edge-tts (322+ voices, free Microsoft); voices verified by `scripts/verify_edge_tts_voices.py`
+- OCR: EasyOCR + Pillow overlay rendering; auto-upgrade fast→quality for non-CJK languages
 - Source separation: Demucs (GPU-accelerated)
-- Known fragile areas: translate.py has 3 providers tangled, web_app.py is monolithic, OCR is 819 LOC
+- Single source of truth for languages: `pipeline/languages.py` (do NOT duplicate metadata anywhere else)
+- Test suite: 337 tests in `tests/`, run with `pytest tests/ -v`
+- Last commit: `d63aa0c` on `main`, pushed to GitHub 2026-04-07
