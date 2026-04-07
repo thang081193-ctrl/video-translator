@@ -9,6 +9,11 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from pipeline.config import cfg
+from pipeline.logger import get_logger
+
+log = get_logger("Preflight")
+
 
 def _is_truthy(value: str | None) -> bool:
     if value is None:
@@ -77,7 +82,7 @@ def _detect_gpu() -> tuple[bool, int, str | None, str]:
             ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=cfg.ffmpeg.nvidia_smi_timeout,
             check=False,
         )
         if result.returncode == 0:
@@ -113,17 +118,17 @@ def collect_runtime_status() -> RuntimeStatus:
 
 
 def _print_summary(status: RuntimeStatus):
-    print("=== Runtime preflight ===")
+    log.info("=== Runtime preflight ===")
     if status.cuda_available:
         gpu_label = status.gpu_name or "Unknown GPU"
-        print(
+        log.info(
             f"[OK] GPU detected: {gpu_label} "
             f"(count={status.gpu_count}, via {status.gpu_probe_source})"
         )
     else:
-        print("[WARN] GPU/CUDA not detected. Whisper will run on CPU.")
+        log.warning("[WARN] GPU/CUDA not detected. Whisper will run on CPU.")
 
-    print(
+    log.info(
         "[INFO] Translation keys: "
         f"total={status.total_translation_keys} "
         f"(Grok={len(status.grok_keys)}, Gemini={len(status.gemini_keys)}, "
@@ -131,15 +136,15 @@ def _print_summary(status: RuntimeStatus):
     )
 
     if status.invalid_grok_keys:
-        print(
-            "[WARN] Some GROK_API_KEY(S) do not start with 'xai-' and will be ignored: "
+        log.warning(
+            f"[WARN] Some GROK_API_KEY(S) do not start with 'xai-' and will be ignored: "
             f"{len(status.invalid_grok_keys)} key(s)"
         )
 
     if status.has_grok:
-        print("[OK] Grok API key detected.")
+        log.info("[OK] Grok API key detected.")
     else:
-        print("[WARN] Grok API key not found (set GROK_API_KEYS or GROK_API_KEY).")
+        log.warning("[WARN] Grok API key not found (set GROK_API_KEYS or GROK_API_KEY).")
 
 
 def run_preflight(
@@ -168,7 +173,7 @@ def run_preflight(
             "Set GROK_API_KEYS (keys must start with 'xai-')."
         )
 
-    print("=== Preflight OK ===")
+    log.info("=== Preflight OK ===")
     return status
 
 

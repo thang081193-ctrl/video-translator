@@ -15,17 +15,26 @@ from pipeline.translate import translate_segments
 from pipeline.subtitle import generate_srt
 from pipeline.burn import burn_subtitles, burn_ocr_overlay, burn_with_overlays
 from pipeline.dub import build_dubbed_audio, dub_video
+from pipeline.config import cfg
+from pipeline.languages import ALL_LANGUAGE_CODES
+from pipeline.logger import setup_logging, get_logger
 
 
 def main():
     load_dotenv()
+    setup_logging(mode="cli")
 
     parser = argparse.ArgumentParser(
         description="Translate video subtitles using Whisper + Gemini API"
     )
+    valid_langs = sorted(ALL_LANGUAGE_CODES)
     parser.add_argument("input", help="Path to video file")
-    parser.add_argument("-t", "--target", required=False, help="Target language code (e.g., vi, ja, ko)")
-    parser.add_argument("-s", "--source", default=None, help="Source language code (auto-detect if omitted)")
+    parser.add_argument("-t", "--target", required=False, choices=valid_langs,
+                        metavar="LANG",
+                        help=f"Target language code. Choices: {', '.join(valid_langs)}")
+    parser.add_argument("-s", "--source", default=None, choices=valid_langs,
+                        metavar="LANG",
+                        help=f"Source language code (auto-detect if omitted). Choices: {', '.join(valid_langs)}")
     parser.add_argument("--whisper-model", default="medium", choices=["tiny", "base", "medium", "large-v3"], help="Whisper model size (default: medium)")
     parser.add_argument("--burn", action="store_true", help="Burn subtitles into video")
     parser.add_argument("-o", "--output-dir", default=None, help="Output directory (default: same as video)")
@@ -150,10 +159,10 @@ def main():
                 print(f"  Translating {len(text_groups)} on-screen texts...")
                 text_groups = translate_ocr_texts(text_groups, source_lang, target_lang)
 
-                # ffmpeg drawtext cannot render diacritics (Vietnamese, French, etc.)
+                # ffmpeg drawtext cannot render diacritics for some languages.
+                # Source of truth: pipeline.languages registry (via cfg).
                 ocr_qual = args.ocr_quality
-                _DRAWTEXT_UNSAFE = {"vi", "fr", "es", "de", "pt", "it", "ru", "th", "hi", "ar"}
-                if ocr_qual == "fast" and target_lang in _DRAWTEXT_UNSAFE:
+                if ocr_qual == "fast" and target_lang in cfg.ocr.drawtext_unsafe_langs:
                     print(f"  Auto-upgrading OCR fast->quality (drawtext can't render {target_lang} diacritics)")
                     ocr_qual = "quality"
 

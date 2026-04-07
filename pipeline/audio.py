@@ -3,6 +3,11 @@ import shutil
 import os
 import json
 
+from pipeline.config import cfg
+from pipeline.logger import get_logger
+
+log = get_logger("Audio")
+
 
 def check_ffmpeg():
     """Check if ffmpeg and ffprobe are available in PATH."""
@@ -31,7 +36,7 @@ def has_audio_track(video_path: str) -> bool:
                 "-select_streams", "a",
                 video_path,
             ],
-            capture_output=True, text=True, check=True, timeout=30,
+            capture_output=True, text=True, check=True, timeout=cfg.ffmpeg.timeout_short,
         )
         data = json.loads(result.stdout)
         return len(data.get("streams", [])) > 0
@@ -60,17 +65,18 @@ def extract_audio(video_path: str, output_dir: str | None = None) -> str:
     base_name = os.path.splitext(os.path.basename(video_path))[0]
     wav_path = os.path.join(output_dir, f"{base_name}.wav")
 
+    log.info("Extracting audio (16kHz mono)")
     subprocess.run(
         [
             "ffmpeg", "-y",
             "-i", video_path,
             "-vn",
-            "-acodec", "pcm_s16le",
-            "-ar", "16000",
-            "-ac", "1",
+            "-acodec", cfg.audio.codec,
+            "-ar", str(cfg.audio.sample_rate),
+            "-ac", str(cfg.audio.channels),
             wav_path,
         ],
-        capture_output=True, text=True, check=True, timeout=300,
+        capture_output=True, text=True, check=True, timeout=cfg.ffmpeg.timeout_default,
     )
 
     return wav_path
@@ -90,17 +96,18 @@ def extract_audio_hq(video_path: str, output_dir: str | None = None) -> str:
     base_name = os.path.splitext(os.path.basename(video_path))[0]
     wav_path = os.path.join(output_dir, f"{base_name}_hq.wav")
 
+    log.info("Extracting audio HQ (44.1kHz stereo)")
     subprocess.run(
         [
             "ffmpeg", "-y",
             "-i", video_path,
             "-vn",
-            "-acodec", "pcm_s16le",
-            "-ar", "44100",
-            "-ac", "2",
+            "-acodec", cfg.audio.codec,
+            "-ar", str(cfg.audio.sample_rate_hq),
+            "-ac", str(cfg.audio.channels_hq),
             wav_path,
         ],
-        capture_output=True, text=True, check=True, timeout=300,
+        capture_output=True, text=True, check=True, timeout=cfg.ffmpeg.timeout_default,
     )
 
     return wav_path
@@ -116,7 +123,7 @@ def get_video_info(video_path: str) -> dict:
             "-select_streams", "v:0",
             video_path,
         ],
-        capture_output=True, text=True, check=True, timeout=300,
+        capture_output=True, text=True, check=True, timeout=cfg.ffmpeg.timeout_default,
     )
     data = json.loads(result.stdout)
     stream = data["streams"][0]

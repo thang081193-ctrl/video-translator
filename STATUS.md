@@ -91,15 +91,30 @@ video-translator/
 - [x] P3: Cache not fingerprinted by model/source
 - [x] Audio clipping/distortion when mixing TTS + BGM (added alimiter + fade)
 
-### Phase 3 — TODO (Not Started)
-- [ ] GUI (Gradio / Streamlit)
+### Phase 3 — Architectural Cleanup & Quality Gates (In Progress)
+
+**Sub-phases:**
+| Phase | Name | Status |
+|-------|------|--------|
+| P3.0 | Foundation: Standards + Tracking | Done |
+| P3.1 | Config Centralization + Structured Logging | Done |
+| P3.2 | API Provider Abstraction | Done |
+| P3.3 | Web App Modularization | Done |
+| P3.4 | Large Module Splitting (OCR + Dub) | Done |
+| P3.5 | Error Handling & Resource Safety | Done |
+| P3.6 | Testing Infrastructure (60 tests) | Done |
+| P3.7 | Docker & Deployment Hardening | Done |
+
+**Tracking:** See `docs/execution/phase-status.md` for detailed progress.
+**Standards:** See `.claude/skills/dev-standards.md` and `.claude/skills/architecture-rules.md`.
+
+### Phase 4 — Features (After Phase 3)
 - [ ] Batch processing (multiple videos)
 - [ ] Dual subtitles (original + translated)
 - [ ] Speaker diarization (pyannote-audio)
 - [ ] Voice cloning / dubbing (ElevenLabs, high quality)
 - [ ] YouTube URL support (auto download)
 - [ ] Progress bar / real-time tracking
-- [ ] Vocal separation from original (isolate BGM from source video)
 
 ### System Requirements
 - Python 3.10+

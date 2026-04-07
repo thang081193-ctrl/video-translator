@@ -5,4 +5,26 @@ __pycache__/
 *.m4a
 *.tmp
 _tts_temp/
+_demucs_temp/
+_ocr_frames/
+_ocr_overlays/
+_test_ocr_debug/
 test_bgm.mp3
+_test_vn_font.py
+
+# Runtime artifacts
+uploads/
+worker.log
+server.log
+
+# Build artifacts
+VastAI_Upload.tar.gz
+*.tar.gz
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Claude Code user-local settings
+.claude/settings.local.json

@@ -1,0 +1,187 @@
+"""Centralized configuration — single source of truth for all constants."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+
+
+def _env_int(name: str, default: int) -> int:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except ValueError:
+        return default
+
+
+@dataclass(frozen=True)
+class AudioConfig:
+    """Audio extraction settings."""
+    sample_rate: int = 16000          # Whisper optimal input
+    sample_rate_hq: int = 44100       # Demucs source separation input
+    channels: int = 1                 # mono for Whisper
+    channels_hq: int = 2              # stereo for Demucs
+    codec: str = "pcm_s16le"
+
+
+@dataclass(frozen=True)
+class TranscribeConfig:
+    """Whisper STT settings."""
+    default_model: str = "medium"
+    beam_size: int = 5
+    vad_filter: bool = True
+    gpu_compute_type: str = "float16"
+    cpu_compute_type: str = "int8"
+
+
+@dataclass(frozen=True)
+class TranslateConfig:
+    """Translation API settings."""
+    grok_endpoint: str = "https://api.x.ai/v1/chat/completions"
+    grok_model: str = "grok-3-mini-fast"
+    grok_temperature: float = 0.3
+    grok_timeout: int = 120
+    gemini_model: str = "gemini-2.0-flash"
+    batch_size: int = 20
+    context_window: int = 2           # segments before/after batch for context
+    attempts_single_key: int = 6      # retry attempts when only 1 key
+    attempts_multi_key: int = 3       # retry attempts per key when multiple
+    retry_delay_single: int = 8       # seconds between retries (single key)
+    retry_delay_multi: int = 5        # seconds between retries (multi key)
+    error_max_length: int = 280       # compact error message truncation
+
+
+@dataclass(frozen=True)
+class SubtitleConfig:
+    """SRT generation settings."""
+    max_line_chars: int = 42
+    font_size: int = 13
+    margin_v: int = 20
+    primary_colour: str = "&H00FFFFFF"
+    back_colour: str = "&H80000000"
+
+
+@dataclass(frozen=True)
+class TTSConfig:
+    """Text-to-speech settings."""
+    concurrency: int = 5              # max concurrent edge-tts requests
+    retry_attempts: int = 3
+    timeout: int = 30                 # seconds per TTS request
+    output_sample_rate: int = 24000
+    output_channels: int = 1
+
+
+@dataclass(frozen=True)
+class DubConfig:
+    """Dubbing / audio mixing settings."""
+    fade_duration: float = 0.015      # 15ms fade in/out
+    limiter_threshold: float = 0.95
+    audio_bitrate: str = "192k"
+    # Volume scaling for keep_original_bgm mode
+    original_bgm_multiplier: float = 4.0
+    original_bgm_min: float = 0.5
+    original_voice_vol: float = 2.5
+    # Volume scaling for custom_bgm mode
+    custom_bgm_multiplier: float = 2.0
+    custom_voice_vol: float = 1.8
+    # Demucs
+    demucs_model: str = "htdemucs"
+
+
+def _load_drawtext_unsafe_langs() -> tuple[str, ...]:
+    """Load drawtext-unsafe language list from the registry.
+
+    Wrapped in a function to avoid import-time circular dependency
+    (pipeline.languages doesn't depend on config, but we want lazy resolution).
+    """
+    from pipeline.languages import DRAWTEXT_UNSAFE_LANGS
+    return DRAWTEXT_UNSAFE_LANGS
+
+
+@dataclass(frozen=True)
+class OCRConfig:
+    """OCR detection settings."""
+    frame_interval: float = 2.0       # seconds between key frames
+    # Languages where ffmpeg drawtext cannot render properly.
+    # Derived from pipeline.languages registry — do not edit independently.
+    drawtext_unsafe_langs: tuple = field(default_factory=_load_drawtext_unsafe_langs)
+
+
+@dataclass(frozen=True)
+class BurnConfig:
+    """Video encoding / subtitle burning settings."""
+    crf: int = 18
+    preset: str = "medium"
+    filter_script_threshold: int = 8000   # chars before switching to filter script file
+
+
+@dataclass(frozen=True)
+class FFmpegConfig:
+    """ffmpeg subprocess timeouts."""
+    timeout_short: int = 30           # ffprobe, quick checks
+    timeout_default: int = 300        # audio extraction, TTS processing
+    timeout_burn: int = 600           # video encoding (subtitle burn, overlay)
+    nvidia_smi_timeout: int = 5
+
+
+@dataclass(frozen=True)
+class WebConfig:
+    """Web server settings."""
+    host: str = "0.0.0.0"
+    port: int = 3456
+    upload_dir: str = "uploads"
+    max_upload_bytes: int = 100 * 1024 * 1024   # 100MB
+    job_timeout: int = 30 * 60                   # 30 minutes
+    cleanup_interval: int = 300                  # 5 minutes
+    cleanup_max_age: int = 86400                 # 24 hours
+    idle_timeout: int = 90 * 60                  # 90 minutes (Vast.ai auto-stop)
+    worker_queue_timeout: int = 5                # seconds to wait for next job
+
+
+@dataclass(frozen=True)
+class Config:
+    """Root configuration — aggregates all sub-configs."""
+    audio: AudioConfig = field(default_factory=AudioConfig)
+    transcribe: TranscribeConfig = field(default_factory=TranscribeConfig)
+    translate: TranslateConfig = field(default_factory=TranslateConfig)
+    subtitle: SubtitleConfig = field(default_factory=SubtitleConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
+    dub: DubConfig = field(default_factory=DubConfig)
+    ocr: OCRConfig = field(default_factory=OCRConfig)
+    burn: BurnConfig = field(default_factory=BurnConfig)
+    ffmpeg: FFmpegConfig = field(default_factory=FFmpegConfig)
+    web: WebConfig = field(default_factory=WebConfig)
+
+    @staticmethod
+    def load() -> Config:
+        """Load config with env var overrides where applicable."""
+        return Config(
+            translate=TranslateConfig(
+                batch_size=_env_int("TRANSLATE_BATCH_SIZE", 20),
+            ),
+            tts=TTSConfig(
+                concurrency=_env_int("TTS_CONCURRENCY", 5),
+            ),
+            web=WebConfig(
+                port=_env_int("PORT", 3456),
+                max_upload_bytes=_env_int("MAX_UPLOAD_MB", 100) * 1024 * 1024,
+                job_timeout=_env_int("JOB_TIMEOUT_MIN", 30) * 60,
+                idle_timeout=_env_int("IDLE_TIMEOUT_MIN", 90) * 60,
+            ),
+        )
+
+
+# Module-level singleton — import and use directly
+cfg = Config.load()

@@ -1,5 +1,10 @@
 import os
 
+from pipeline.config import cfg
+from pipeline.logger import get_logger
+
+log = get_logger("Subtitle")
+
 
 def _format_timestamp(seconds: float) -> str:
     """Convert seconds to SRT timestamp format: HH:MM:SS,mmm"""
@@ -13,8 +18,10 @@ def _format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
-def _break_lines(text: str, max_chars: int = 42) -> str:
+def _break_lines(text: str, max_chars: int | None = None) -> str:
     """Break long text into 2 lines at a word boundary."""
+    if max_chars is None:
+        max_chars = cfg.subtitle.max_line_chars
     if len(text) <= max_chars:
         return text
 
@@ -65,4 +72,4 @@ def generate_srt(segments: list[dict], output_path: str, text_key: str = "transl
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    print(f"  Generated SRT: {output_path} ({index} entries)")
+    log.info(f"Generated SRT: {output_path} ({index} entries)")

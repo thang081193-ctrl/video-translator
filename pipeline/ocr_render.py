@@ -12,6 +12,10 @@ from typing import Optional
 
 import numpy as np
 
+from pipeline.logger import get_logger
+
+log = get_logger("OCR-Render")
+
 try:
     from PIL import Image, ImageDraw, ImageFont
 except ImportError:
@@ -24,36 +28,66 @@ except ImportError:
 # Font paths — cross-platform (Pillow native paths)
 # ---------------------------------------------------------------------------
 if platform.system() == "Windows":
+    # Windows: rely on system fonts. Segoe UI Symbol covers most scripts;
+    # Arial Unicode (if installed) covers everything. Fallback chain handles gaps.
     FONT_MAP = {
+        # CJK
         "zh": "C:/Windows/Fonts/msyh.ttc",
         "ja": "C:/Windows/Fonts/msgothic.ttc",
         "ko": "C:/Windows/Fonts/malgun.ttf",
+        # Indic / SE Asia
         "th": "C:/Windows/Fonts/leelawad.ttf",
         "hi": "C:/Windows/Fonts/mangal.ttf",
+        "mr": "C:/Windows/Fonts/mangal.ttf",        # Marathi uses Devanagari
+        "bn": "C:/Windows/Fonts/vrinda.ttf",        # Bengali
+        "te": "C:/Windows/Fonts/gautami.ttf",       # Telugu
+        "ta": "C:/Windows/Fonts/latha.ttf",         # Tamil
+        # Arabic script
         "ar": "C:/Windows/Fonts/arial.ttf",
+        "ur": "C:/Windows/Fonts/arial.ttf",         # Urdu (Nastaliq variant if available)
+        "fa": "C:/Windows/Fonts/arial.ttf",         # Farsi/Persian
+        # Greek + Cyrillic + Latin (Arial Unicode covers all)
+        "el": "C:/Windows/Fonts/arial.ttf",
         "vi": "C:/Windows/Fonts/arial.ttf",
     }
     DEFAULT_FONT = "C:/Windows/Fonts/arial.ttf"
     FALLBACK_FONTS = [
+        "C:/Windows/Fonts/seguisym.ttf",            # Segoe UI Symbol — wide coverage
         "C:/Windows/Fonts/segoeui.ttf",
         "C:/Windows/Fonts/msyh.ttc",
         "C:/Windows/Fonts/tahoma.ttf",
         "C:/Windows/Fonts/times.ttf",
     ]
 else:
+    # Linux (Docker container with Noto fonts installed). All Noto fonts MUST
+    # be installed via Dockerfile (fonts-noto, fonts-noto-bengali, etc.).
     FONT_MAP = {
+        # CJK
         "zh": "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "ja": "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "ko": "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        # SE Asia
         "th": "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+        # Indic
         "hi": "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        "mr": "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        "bn": "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
+        "te": "/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf",
+        "ta": "/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf",
+        # Arabic script
         "ar": "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+        "ur": "/usr/share/fonts/truetype/noto/NotoNastaliqUrdu-Regular.ttf",
+        "fa": "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+        # Greek (NotoSans handles Greek + Cyrillic too, but explicit is clearer)
+        "el": "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        # Latin / Cyrillic (NotoSans-Regular)
         "vi": "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
     }
     DEFAULT_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     FALLBACK_FONTS = [
         "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
 
@@ -121,8 +155,16 @@ def _select_font(target_lang: str, size: int, sample_text: str = "") -> ImageFon
             best_font = font
 
     if best_font is not None:
+        # Warn if best available font still has poor coverage
+        # (output will likely show tofu characters for missing glyphs)
+        if best_coverage < 0.8:
+            log.warning(
+                f"Font glyph coverage low for lang={target_lang}: "
+                f"{best_coverage:.0%} — install Noto fonts for missing scripts"
+            )
         return best_font
 
+    log.warning(f"No font with any glyph coverage found for lang={target_lang}, using Pillow default")
     # Last resort
     return ImageFont.load_default()
 
@@ -433,7 +475,7 @@ def render_text_overlays(
             text_groups, video_width, video_height,
             output_dir, target_lang, inpaint_patches,
         )
-        print(f"  Rendered {len(overlays)} tracked overlay images")
+        log.info(f"Rendered {len(overlays)} tracked overlay images")
         return overlays
 
     # Static mode: group by time range and merge into composite PNGs
@@ -466,5 +508,5 @@ def render_text_overlays(
         overlays.append({"path": overlay_path, "start_time": start, "end_time": end})
         overlay_idx += 1
 
-    print(f"  Rendered {len(overlays)} overlay images")
+    log.info(f"Rendered {len(overlays)} overlay images")
     return overlays
