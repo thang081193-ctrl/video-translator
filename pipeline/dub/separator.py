@@ -5,6 +5,7 @@ import os
 import subprocess
 
 from pipeline.config import cfg
+from pipeline.errors import DegradedError
 from pipeline.logger import get_logger
 
 log = get_logger("Dub")
@@ -40,23 +41,31 @@ def separate_audio(audio_path: str, demucs_dir: str, model: str = "htdemucs") ->
     try:
         from demucs.separate import main as demucs_main
         try:
-            demucs_main([
-                "--two-stems", "vocals",
-                "-n", model,
-                "-o", demucs_dir,
-                audio_path,
-            ])
-        except RuntimeError:
-            log.warning("GPU OOM during Demucs, retrying on CPU...")
-            import torch
-            torch.cuda.empty_cache()
-            demucs_main([
-                "--two-stems", "vocals",
-                "-n", model,
-                "-d", "cpu",
-                "-o", demucs_dir,
-                audio_path,
-            ])
+            try:
+                demucs_main([
+                    "--two-stems", "vocals",
+                    "-n", model,
+                    "-o", demucs_dir,
+                    audio_path,
+                ])
+            except RuntimeError:
+                log.warning("GPU OOM during Demucs, retrying on CPU...")
+                import torch
+                torch.cuda.empty_cache()
+                demucs_main([
+                    "--two-stems", "vocals",
+                    "-n", model,
+                    "-d", "cpu",
+                    "-o", demucs_dir,
+                    audio_path,
+                ])
+        except Exception as e:
+            # Both GPU and CPU paths failed — surface as DegradedError so
+            # callers can skip source separation and fall back (e.g. to
+            # custom_bgm mode) instead of aborting the whole job.
+            raise DegradedError(
+                f"Demucs source separation failed: {e}", feature="demucs"
+            ) from e
     finally:
         torchaudio.save = _original_save
 

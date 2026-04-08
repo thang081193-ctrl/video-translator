@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from pipeline.errors import FatalError
 from pipeline.logger import get_logger
 from pipeline.providers.base import TranslationProvider, KeyRotator
 from pipeline.providers.grok import GrokProvider
@@ -62,7 +63,7 @@ def load_keys() -> list[dict[str, str]]:
     loaded.extend({"provider": "vertex", "key": key} for key in vertex_keys)
 
     if not loaded:
-        raise ValueError(
+        raise FatalError(
             "No API keys set. Add GROK_API_KEYS, GEMINI_API_KEYS, "
             "and/or VERTEX_API_KEYS to .env"
         )
@@ -81,7 +82,7 @@ def build_rotator(keys: list[dict[str, str]]) -> KeyRotator:
         if cache_key not in providers:
             cls = PROVIDER_CLASSES.get(provider_name)
             if cls is None:
-                raise ValueError(f"Unknown provider: {provider_name}")
+                raise FatalError(f"Unknown provider: {provider_name}")
             providers[cache_key] = cls(api_key)
 
     # Map provider names to instances (use the key-specific instance)

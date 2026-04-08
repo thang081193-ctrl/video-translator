@@ -15,7 +15,7 @@ This file is the single source of truth for implementation progress across sessi
 - Last Updated: 2026-04-08
 - Current Owner: Claude + User
 - Current Branch: main
-- Current Focus: P5.0 Done (337/337 tests pass). P5.1 In Progress — custom exceptions + has_audio_track fix.
+- Current Focus: Phase 5 COMPLETE — P5.0 (TempDir migration) + P5.1 (custom exceptions + has_audio_track fix) done. 337/337 tests pass. Ready for Vast.ai deployment verification.
 - Overall Health: Green
 - Key Blockers: None
 - Next Milestone Date: TBD
@@ -39,7 +39,7 @@ This file is the single source of truth for implementation progress across sessi
 | **P4.5** | **Add 15 New Languages (top 30)** | Done | Claude+User | 2026-04-07 | 2026-04-07 | PASS | PASS | — | Registry expanded 15 → 30; all 30 voices verified by script; 266/266 tests pass |
 | **P4.6** | **Edge Case Test Suite** | Done | Claude+User | 2026-04-07 | 2026-04-07 | PASS | PASS | — | 5 new test files + 71 new tests: pipeline_runner, cross_mode_parity (CLI/Web drift prevention), negative_paths, audio_edge (mocked subprocess), pipeline_integration (full pipeline mocked). 337/337 tests pass |
 | **P5.0** | **TempDir Migration + Mixer Refactor** | Done | Claude+User | 2026-04-08 | 2026-04-08 | PASS | PASS | [P5.0](reports/P5.0-tempdir-migration.md) | Replaced `os.makedirs("_tts_temp"/"_demucs_temp")` with `temp_dir()` context manager; extracted 4 helpers from 165 LOC `build_dubbed_audio` (3 under 50 LOC, orchestrator 58). 337/337 tests pass. Rule 5 enforced. |
-| **P5.1** | **Custom Exception Adoption + has_audio_track Fix** | In Progress | Claude+User | 2026-04-08 | — | — | — | — | Migrate 22 `RuntimeError`/`ValueError`/`FileNotFoundError` → `FatalError`/`TransientError`/`DegradedError`; fix silent failure in `has_audio_track` (Rule 4) |
+| **P5.1** | **Custom Exception Adoption + has_audio_track Fix** | Done | Claude+User | 2026-04-08 | 2026-04-08 | PASS | PASS | [P5.1](reports/P5.1-exception-adoption.md) | 22 raises migrated (16 FatalError, 2 TransientError split in grok.py, 1 DegradedError wrapper in separator.py, 3 in translate.py/tts.py after retry exhaustion); `has_audio_track` silent failure fixed (P3.5 miss closed). 337/337 tests pass. Rule 4 enforced. |
 
 Status values: `Not Started`, `In Progress`, `Blocked`, `Done`, `Done w/ Exception`.
 
@@ -60,6 +60,7 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`, `Done w/ Excepti
 | Date | Phase ID | Report File | Result | Verified By |
 |---|---|---|---|---|
 | 2026-04-08 | P5.0 | [P5.0-tempdir-migration.md](reports/P5.0-tempdir-migration.md) | CONDITIONAL PASS | Claude Opus 4.6 |
+| 2026-04-08 | P5.1 | [P5.1-exception-adoption.md](reports/P5.1-exception-adoption.md) | CONDITIONAL PASS | Claude Opus 4.6 |
 
 ## 6) Session Kickoff Checklist (Copy To New Session)
 ```text
@@ -106,12 +107,14 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`, `Done w/ Excepti
 - Real-time progress (WebSocket) — Medium effort
 
 ## 8) Known Issues / Tech Debt
-- `pipeline/audio.py:23-39` — `has_audio_track()` silently returns False on ANY ffprobe error (P3.5 miss; documented in test_audio_edge.py)
-- `pipeline/dub/mixer.py`, `pipeline/ocr/detector.py` — still use raw `os.makedirs("_temp")` instead of `temp_dir()` context manager
-- `pipeline/translate.py` — uses inline retry loop instead of `@retry` decorator
-- All pipeline modules — still raise `RuntimeError`/`ValueError` instead of `TransientError`/`FatalError`/`DegradedError`
-- `docs/execution/reports/` — empty (phase reports not written)
-- Old GitHub PAT exposed in this session — bro should revoke at https://github.com/settings/tokens
+- ~~`pipeline/audio.py:23-39` — `has_audio_track()` silently returns False on ANY ffprobe error~~ — **FIXED in P5.1**
+- ~~`pipeline/dub/mixer.py` — still uses raw `os.makedirs("_temp")`~~ — **FIXED in P5.0**
+- ~~All pipeline modules — still raise `RuntimeError`/`ValueError`~~ — **FIXED in P5.1** (22 raises migrated)
+- `pipeline/ocr/detector.py` — not audited in P5.0; may still have raw `os.makedirs` (TBD in future phase)
+- `pipeline/translate.py` — still uses inline retry loop instead of `@retry` decorator (Issue #8, future phase). P5.1 changed only the terminal raise types to enable future decorator adoption.
+- `video_translator.py:227,259,311` + `web/pipeline_runner.py:270` — dead `_tts_temp`/`_demucs_temp` cleanup loops still present (defensive, harmless; cleanup is a future cosmetic commit)
+- Phase reports for P3.0–P4.6 not yet written (only P5.0, P5.1 reports exist)
+- Old GitHub PAT exposed — revoke at https://github.com/settings/tokens
 
 ## 9) Handoff Notes
 - Pipeline entry points: `video_translator.py` (CLI), `web_app.py` (Web, ~40 LOC thin entry)

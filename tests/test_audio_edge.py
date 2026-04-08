@@ -1,8 +1,10 @@
 """Audio extraction edge cases — mocked subprocess for fast tests.
 
-Documents current behavior of has_audio_track silent failure mode.
-TODO (future phase): has_audio_track should raise FatalError on ffprobe error
-instead of silently returning False.
+Enforces the P5.1 contract:
+- has_audio_track returns True/False as data (streams present/absent)
+- has_audio_track raises FatalError when ffprobe cannot determine the
+  answer (CalledProcessError, TimeoutExpired, JSONDecodeError).
+- extract_audio wraps all validation failures as FatalError.
 """
 
 import json
@@ -12,6 +14,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from pipeline.audio import has_audio_track, extract_audio, get_video_info, check_ffmpeg
+from pipeline.errors import FatalError
 
 
 class TestCheckFfmpeg:
@@ -21,18 +24,12 @@ class TestCheckFfmpeg:
         """Project requires ffmpeg + ffprobe in PATH."""
         try:
             check_ffmpeg()
-        except RuntimeError as e:
+        except FatalError as e:
             pytest.skip(f"ffmpeg not installed: {e}")
 
 
 class TestHasAudioTrack:
-    """has_audio_track must always return bool — never raise.
-
-    NOTE: Current behavior silently returns False on ANY ffprobe error
-    (CalledProcessError, JSONDecodeError, TimeoutExpired). This is technically
-    a Phase 3 P3.5 miss — should raise FatalError instead. These tests document
-    current behavior so we don't accidentally regress.
-    """
+    """has_audio_track: bool for data, FatalError for operational failures."""
 
     @patch("pipeline.audio.subprocess.run")
     def test_has_audio_returns_true_for_audio_streams(self, mock_run):
@@ -55,26 +52,29 @@ class TestHasAudioTrack:
         assert has_audio_track("any.mp4") is False
 
     @patch("pipeline.audio.subprocess.run")
-    def test_has_audio_returns_false_on_ffprobe_error(self, mock_run):
-        """KNOWN ISSUE: silent failure. ffprobe error → False."""
+    def test_has_audio_raises_fatal_on_ffprobe_error(self, mock_run):
+        """ffprobe CalledProcessError → FatalError (no silent False)."""
         mock_run.side_effect = subprocess.CalledProcessError(1, "ffprobe")
-        assert has_audio_track("any.mp4") is False
+        with pytest.raises(FatalError, match="ffprobe failed"):
+            has_audio_track("any.mp4")
 
     @patch("pipeline.audio.subprocess.run")
-    def test_has_audio_returns_false_on_timeout(self, mock_run):
-        """KNOWN ISSUE: silent failure. Timeout → False."""
+    def test_has_audio_raises_fatal_on_timeout(self, mock_run):
+        """ffprobe TimeoutExpired → FatalError (no silent False)."""
         mock_run.side_effect = subprocess.TimeoutExpired("ffprobe", 30)
-        assert has_audio_track("any.mp4") is False
+        with pytest.raises(FatalError, match="ffprobe failed"):
+            has_audio_track("any.mp4")
 
     @patch("pipeline.audio.subprocess.run")
-    def test_has_audio_returns_false_on_json_error(self, mock_run):
-        """KNOWN ISSUE: silent failure. Bad JSON → False."""
+    def test_has_audio_raises_fatal_on_json_error(self, mock_run):
+        """Invalid JSON from ffprobe → FatalError (no silent False)."""
         mock_run.return_value = MagicMock(stdout="not json", returncode=0)
-        assert has_audio_track("any.mp4") is False
+        with pytest.raises(FatalError, match="ffprobe failed"):
+            has_audio_track("any.mp4")
 
     @patch("pipeline.audio.subprocess.run")
     def test_has_audio_with_missing_streams_key(self, mock_run):
-        """Empty data dict (no 'streams' key) → False, not crash."""
+        """Empty data dict (no 'streams' key) is valid data → False, not crash."""
         mock_run.return_value = MagicMock(
             stdout=json.dumps({}),
             returncode=0,
@@ -84,19 +84,19 @@ class TestHasAudioTrack:
 
 class TestExtractAudio:
     def test_missing_video_file_raises(self, tmp_path):
-        with pytest.raises(FileNotFoundError) as exc_info:
+        with pytest.raises(FatalError) as exc_info:
             extract_audio(str(tmp_path / "does_not_exist.mp4"))
         assert "not found" in str(exc_info.value).lower()
 
     @patch("pipeline.audio.has_audio_track")
     @patch("pipeline.audio.subprocess.run")
     @patch("pipeline.audio.check_ffmpeg")
-    def test_no_audio_track_raises_value_error(self, mock_check, mock_run, mock_has, tmp_path):
-        """Video without audio track → ValueError (not silent skip)."""
+    def test_no_audio_track_raises_fatal_error(self, mock_check, mock_run, mock_has, tmp_path):
+        """Video without audio track → FatalError (not silent skip)."""
         video = tmp_path / "test.mp4"
         video.touch()
         mock_has.return_value = False
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(FatalError) as exc_info:
             extract_audio(str(video))
         assert "no audio track" in str(exc_info.value).lower()
 

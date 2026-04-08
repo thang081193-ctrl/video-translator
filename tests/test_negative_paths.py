@@ -19,12 +19,12 @@ from pipeline.errors import TransientError, FatalError, DegradedError
 
 class TestKeyLoadingErrors:
     def test_no_keys_at_all(self, monkeypatch):
-        """No API keys set anywhere → ValueError with helpful message."""
+        """No API keys set anywhere → FatalError with helpful message."""
         for var in ["GROK_API_KEYS", "GROK_API_KEY", "GEMINI_API_KEYS",
                     "GEMINI_API_KEY", "VERTEX_API_KEYS", "VERTEX_API_KEY"]:
             monkeypatch.delenv(var, raising=False)
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(FatalError) as exc_info:
             load_keys()
         msg = str(exc_info.value)
         assert "GROK_API_KEYS" in msg or "GEMINI_API_KEYS" in msg
@@ -36,7 +36,7 @@ class TestKeyLoadingErrors:
         for var in ["GROK_API_KEY", "GEMINI_API_KEY", "VERTEX_API_KEY"]:
             monkeypatch.delenv(var, raising=False)
 
-        with pytest.raises(ValueError):
+        with pytest.raises(FatalError):
             load_keys()
 
     def test_whitespace_only_keys_filtered(self, monkeypatch):
@@ -46,7 +46,7 @@ class TestKeyLoadingErrors:
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("GROK_API_KEYS", "   ,  ,   ")
 
-        with pytest.raises(ValueError):
+        with pytest.raises(FatalError):
             load_keys()
 
     def test_comma_separated_keys(self, monkeypatch):
@@ -153,13 +153,13 @@ class TestVoiceLookup:
         assert get_voice_for_lang("en") == "en-US-JennyNeural"
 
     def test_invalid_language_raises(self):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(FatalError) as exc_info:
             get_voice_for_lang("xx")
         assert "No default voice" in str(exc_info.value)
 
     def test_error_message_lists_supported(self):
         """Error message should help user pick a valid lang."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(FatalError) as exc_info:
             get_voice_for_lang("xx")
         msg = str(exc_info.value)
         assert "vi" in msg
@@ -174,7 +174,7 @@ class TestVoiceLookup:
         assert get_voice_for_lang("xx", "custom-voice") == "custom-voice"
 
     def test_empty_lang_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(FatalError):
             get_voice_for_lang("")
 
 

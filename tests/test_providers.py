@@ -1,6 +1,7 @@
 """Tests for pipeline/providers/ — provider base, factory, key rotation."""
 
 import pytest
+from pipeline.errors import FatalError
 from pipeline.providers.base import TranslationProvider, KeyRotator
 from pipeline.providers.factory import load_keys, build_rotator
 
@@ -97,7 +98,7 @@ class TestLoadKeys:
         for var in ["GROK_API_KEYS", "GROK_API_KEY", "GEMINI_API_KEYS",
                      "GEMINI_API_KEY", "VERTEX_API_KEYS", "VERTEX_API_KEY"]:
             monkeypatch.delenv(var, raising=False)
-        with pytest.raises(ValueError, match="No API keys"):
+        with pytest.raises(FatalError, match="No API keys"):
             load_keys()
 
     def test_single_grok_key(self, monkeypatch):

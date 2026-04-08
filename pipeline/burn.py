@@ -3,6 +3,7 @@ import subprocess
 
 from pipeline.audio import check_ffmpeg
 from pipeline.config import cfg
+from pipeline.errors import FatalError
 from pipeline.logger import get_logger
 
 log = get_logger("Burn")
@@ -60,9 +61,9 @@ def burn_subtitles(video_path: str, srt_path: str, output_path: str | None = Non
     check_ffmpeg()
 
     if not os.path.isfile(video_path):
-        raise FileNotFoundError(f"Video file not found: {video_path}")
+        raise FatalError(f"Video file not found: {video_path}")
     if not os.path.isfile(srt_path):
-        raise FileNotFoundError(f"SRT file not found: {srt_path}")
+        raise FatalError(f"SRT file not found: {srt_path}")
 
     if output_path is None:
         base, ext = os.path.splitext(video_path)
@@ -99,7 +100,7 @@ def burn_ocr_overlay(video_path: str, ocr_filter: str, output_path: str):
     check_ffmpeg()
 
     if not os.path.isfile(video_path):
-        raise FileNotFoundError(f"Video file not found: {video_path}")
+        raise FatalError(f"Video file not found: {video_path}")
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
@@ -133,7 +134,7 @@ def burn_with_overlays(
     check_ffmpeg()
 
     if not os.path.isfile(video_path):
-        raise FileNotFoundError(f"Video file not found: {video_path}")
+        raise FatalError(f"Video file not found: {video_path}")
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 

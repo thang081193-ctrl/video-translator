@@ -6,6 +6,7 @@ import subprocess
 
 from pipeline.audio import check_ffmpeg
 from pipeline.config import cfg
+from pipeline.errors import FatalError
 from pipeline.logger import get_logger
 from pipeline.utils import temp_dir
 
@@ -60,7 +61,7 @@ def _generate_tts_pieces(
             audio_pieces.append((seg_start, seg_end, tts_adjusted))
 
     if not audio_pieces:
-        raise RuntimeError("No TTS segments generated")
+        raise FatalError("No TTS segments generated")
 
     return audio_pieces
 
@@ -205,10 +206,10 @@ def build_dubbed_audio(
 
     if audio_mode == "custom_bgm":
         if not bgm_path or not os.path.isfile(bgm_path):
-            raise FileNotFoundError(f"Background music file not found: {bgm_path}")
+            raise FatalError(f"Background music file not found: {bgm_path}")
     elif audio_mode == "keep_original_bgm":
         if not original_audio_path or not os.path.isfile(original_audio_path):
-            raise FileNotFoundError("Original audio file required for keep_original_bgm mode")
+            raise FatalError("Original audio file required for keep_original_bgm mode")
 
     with temp_dir("tts", base_dir=output_dir) as tts_dir:
         audio_pieces = _generate_tts_pieces(segments, voice, tts_dir)

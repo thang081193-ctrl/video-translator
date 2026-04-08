@@ -4,6 +4,7 @@ import os
 import json
 
 from pipeline.config import cfg
+from pipeline.errors import FatalError
 from pipeline.logger import get_logger
 
 log = get_logger("Audio")
@@ -17,7 +18,7 @@ def check_ffmpeg():
     if shutil.which("ffprobe") is None:
         missing.append("ffprobe")
     if missing:
-        raise RuntimeError(
+        raise FatalError(
             f"{', '.join(missing)} not found in PATH. Install ffmpeg:\n"
             "  Windows: choco install ffmpeg\n"
             "  macOS:   brew install ffmpeg\n"
@@ -26,7 +27,17 @@ def check_ffmpeg():
 
 
 def has_audio_track(video_path: str) -> bool:
-    """Check if video file has an audio track using ffprobe."""
+    """Check if video file has an audio track using ffprobe.
+
+    Returns:
+        True if ffprobe reports at least one audio stream.
+        False if ffprobe ran successfully but found zero audio streams
+        (valid data for video-only files).
+
+    Raises:
+        FatalError: if ffprobe failed, timed out, or returned invalid JSON
+        — the audio track status could not be determined.
+    """
     try:
         result = subprocess.run(
             [
@@ -39,9 +50,9 @@ def has_audio_track(video_path: str) -> bool:
             capture_output=True, text=True, check=True, timeout=cfg.ffmpeg.timeout_short,
         )
         data = json.loads(result.stdout)
-        return len(data.get("streams", [])) > 0
-    except (subprocess.CalledProcessError, json.JSONDecodeError, subprocess.TimeoutExpired):
-        return False
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+        raise FatalError(f"ffprobe failed on {video_path}: {e}") from e
+    return len(data.get("streams", [])) > 0
 
 
 def extract_audio(video_path: str, output_dir: str | None = None) -> str:
@@ -53,10 +64,10 @@ def extract_audio(video_path: str, output_dir: str | None = None) -> str:
     check_ffmpeg()
 
     if not os.path.isfile(video_path):
-        raise FileNotFoundError(f"Video file not found: {video_path}")
+        raise FatalError(f"Video file not found: {video_path}")
 
     if not has_audio_track(video_path):
-        raise ValueError(f"Video has no audio track: {video_path}")
+        raise FatalError(f"Video has no audio track: {video_path}")
 
     if output_dir is None:
         output_dir = os.path.dirname(os.path.abspath(video_path))
@@ -87,7 +98,7 @@ def extract_audio_hq(video_path: str, output_dir: str | None = None) -> str:
     check_ffmpeg()
 
     if not os.path.isfile(video_path):
-        raise FileNotFoundError(f"Video file not found: {video_path}")
+        raise FatalError(f"Video file not found: {video_path}")
 
     if output_dir is None:
         output_dir = os.path.dirname(os.path.abspath(video_path))

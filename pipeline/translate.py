@@ -9,6 +9,7 @@ import re
 import time
 
 from pipeline.config import cfg
+from pipeline.errors import FatalError
 from pipeline.logger import get_logger
 from pipeline.providers.base import TranslationProvider
 from pipeline.providers.factory import load_keys, build_rotator
@@ -181,14 +182,18 @@ def translate_segments(
                     time.sleep(wait_time)
 
         if translations is None:
+            # Retry loop has already exhausted max_total_attempts. Raising
+            # TransientError here would mislead any outer retry decorator
+            # into trying again — we just finished trying. FatalError is
+            # honest: "we tried, we failed, escalate to user".
             if last_error and TranslationProvider.is_rate_limit_error(last_error):
-                raise RuntimeError(
+                raise FatalError(
                     f"API quota/rate limit hit while translating batch {batch_idx + 1}. "
                     f"Attempts: {max_total_attempts} across {len(rotator.keys)} key(s). "
                     f"Add more keys to GROK_API_KEYS / GEMINI_API_KEYS / VERTEX_API_KEYS or wait and retry. "
                     f"Last API error: {last_error}"
                 )
-            raise RuntimeError(
+            raise FatalError(
                 f"Failed to translate batch {batch_idx + 1} after {max_total_attempts} attempts "
                 f"across {len(rotator.keys)} key(s). Last error: {last_error or 'unknown'}"
             )

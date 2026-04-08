@@ -7,6 +7,7 @@ import time
 from abc import ABC, abstractmethod
 
 from pipeline.config import cfg
+from pipeline.errors import FatalError
 from pipeline.logger import get_logger
 
 log = get_logger("Provider")
@@ -58,7 +59,7 @@ class KeyRotator:
 
     def __init__(self, keys: list[dict[str, str]], providers: dict[str, TranslationProvider]):
         if not keys:
-            raise ValueError(
+            raise FatalError(
                 "No API keys provided. Set GROK_API_KEYS, GEMINI_API_KEYS, "
                 "and/or VERTEX_API_KEYS in .env"
             )

@@ -7,6 +7,7 @@ import urllib.request
 import urllib.error
 
 from pipeline.config import cfg
+from pipeline.errors import FatalError, TransientError
 from pipeline.logger import get_logger
 from pipeline.providers.base import TranslationProvider
 
@@ -59,4 +60,11 @@ class GrokProvider(TranslationProvider):
                 body = e.read().decode("utf-8", errors="replace")[:500]
             except Exception:
                 pass
-            raise RuntimeError(f"Grok API {e.code}: {body}") from e
+            # 429 (rate limit) and 5xx (server errors) are retryable; 4xx
+            # auth/request bugs are not — inline retry loop in translate.py
+            # still catches Exception and will trigger either way, but typed
+            # exceptions let future @retry decorator discriminate without
+            # string parsing.
+            if e.code == 429 or e.code >= 500:
+                raise TransientError(f"Grok API {e.code}: {body}", retry_after=5) from e
+            raise FatalError(f"Grok API {e.code}: {body}") from e

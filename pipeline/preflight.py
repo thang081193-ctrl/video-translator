@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 from pipeline.config import cfg
+from pipeline.errors import FatalError
 from pipeline.logger import get_logger
 
 log = get_logger("Preflight")
@@ -156,19 +157,19 @@ def run_preflight(
     _print_summary(status)
 
     if require_cuda and not status.cuda_available:
-        raise RuntimeError(
+        raise FatalError(
             "REQUIRE_CUDA is enabled but no GPU/CUDA device is visible. "
             "Check Vast instance type and runtime (--gpus all)."
         )
 
     if require_translation_keys and status.total_translation_keys == 0:
-        raise RuntimeError(
+        raise FatalError(
             "No translation API key found. Add at least one of: "
             "GROK_API_KEYS, GEMINI_API_KEYS, VERTEX_API_KEYS."
         )
 
     if require_grok and not status.has_grok:
-        raise RuntimeError(
+        raise FatalError(
             "REQUIRE_GROK is enabled but no valid Grok key was found. "
             "Set GROK_API_KEYS (keys must start with 'xai-')."
         )

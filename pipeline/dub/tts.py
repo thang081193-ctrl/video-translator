@@ -8,6 +8,7 @@ import sys
 import edge_tts
 
 from pipeline.config import cfg
+from pipeline.errors import FatalError
 from pipeline.languages import DEFAULT_VOICES
 from pipeline.logger import get_logger
 
@@ -25,7 +26,7 @@ def get_voice_for_lang(lang: str, custom_voice: str | None = None) -> str:
         return custom_voice
     voice = DEFAULT_VOICES.get(lang)
     if not voice:
-        raise ValueError(
+        raise FatalError(
             f"No default voice for language '{lang}'. "
             f"Use --tts-voice to specify one. Supported: {', '.join(sorted(DEFAULT_VOICES.keys()))}"
         )
@@ -122,7 +123,9 @@ async def _batch_tts(tts_tasks: list[tuple], voice: str):
                     return
                 except (asyncio.TimeoutError, Exception) as e:
                     if attempt == cfg.tts.retry_attempts - 1:
-                        raise RuntimeError(f"TTS failed after {cfg.tts.retry_attempts} retries: {e}")
+                        # Retries exhausted — honest FatalError (don't re-raise as
+                        # Transient, that would invite outer retry loops to try again).
+                        raise FatalError(f"TTS failed after {cfg.tts.retry_attempts} retries: {e}") from e
                     await asyncio.sleep(1 * (attempt + 1))
 
     await asyncio.gather(*[
