@@ -15,7 +15,7 @@ This file is the single source of truth for implementation progress across sessi
 - Last Updated: 2026-04-08
 - Current Owner: Claude + User
 - Current Branch: main
-- Current Focus: Phase 5 COMPLETE — P5.0 (TempDir migration) + P5.1 (custom exceptions + has_audio_track fix) done. 337/337 tests pass. Ready for Vast.ai deployment verification.
+- Current Focus: Phase 5 COMPLETE — P5.0 (TempDir migration) + P5.1 (custom exceptions + has_audio_track fix) done. 337/337 unit tests pass + end-to-end smoke test on Windows dev box (real ffmpeg videos, web server boot, exception contracts, 30 edge-tts voices). Ready for Vast.ai deployment + GPU optimization phase.
 - Overall Health: Green
 - Key Blockers: None
 - Next Milestone Date: TBD
@@ -59,8 +59,8 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`, `Done w/ Excepti
 ## 5) Latest Report Index
 | Date | Phase ID | Report File | Result | Verified By |
 |---|---|---|---|---|
-| 2026-04-08 | P5.0 | [P5.0-tempdir-migration.md](reports/P5.0-tempdir-migration.md) | CONDITIONAL PASS | Claude Opus 4.6 |
-| 2026-04-08 | P5.1 | [P5.1-exception-adoption.md](reports/P5.1-exception-adoption.md) | CONDITIONAL PASS | Claude Opus 4.6 |
+| 2026-04-08 | P5.0 | [P5.0-tempdir-migration.md](reports/P5.0-tempdir-migration.md) | PASS | Claude Opus 4.6 |
+| 2026-04-08 | P5.1 | [P5.1-exception-adoption.md](reports/P5.1-exception-adoption.md) | PASS | Claude Opus 4.6 |
 
 ## 6) Session Kickoff Checklist (Copy To New Session)
 ```text
