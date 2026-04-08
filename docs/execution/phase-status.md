@@ -15,7 +15,7 @@ This file is the single source of truth for implementation progress across sessi
 - Last Updated: 2026-04-08
 - Current Owner: Claude + User
 - Current Branch: main
-- Current Focus: Phase 5 COMPLETE — P5.0 (TempDir migration) + P5.1 (custom exceptions + has_audio_track fix) done. 337/337 unit tests pass + end-to-end smoke test on Windows dev box (real ffmpeg videos, web server boot, exception contracts, 30 edge-tts voices). Ready for Vast.ai deployment + GPU optimization phase.
+- Current Focus: P6.A Done (365/365 tests pass, live smoketest verified). P6.B In Progress (cold-start + setup automation). P6.C queued (cost / GPU mgmt).
 - Overall Health: Green
 - Key Blockers: None
 - Next Milestone Date: TBD
@@ -40,6 +40,9 @@ This file is the single source of truth for implementation progress across sessi
 | **P4.6** | **Edge Case Test Suite** | Done | Claude+User | 2026-04-07 | 2026-04-07 | PASS | PASS | — | 5 new test files + 71 new tests: pipeline_runner, cross_mode_parity (CLI/Web drift prevention), negative_paths, audio_edge (mocked subprocess), pipeline_integration (full pipeline mocked). 337/337 tests pass |
 | **P5.0** | **TempDir Migration + Mixer Refactor** | Done | Claude+User | 2026-04-08 | 2026-04-08 | PASS | PASS | [P5.0](reports/P5.0-tempdir-migration.md) | Replaced `os.makedirs("_tts_temp"/"_demucs_temp")` with `temp_dir()` context manager; extracted 4 helpers from 165 LOC `build_dubbed_audio` (3 under 50 LOC, orchestrator 58). 337/337 tests pass. Rule 5 enforced. |
 | **P5.1** | **Custom Exception Adoption + has_audio_track Fix** | Done | Claude+User | 2026-04-08 | 2026-04-08 | PASS | PASS | [P5.1](reports/P5.1-exception-adoption.md) | 22 raises migrated (16 FatalError, 2 TransientError split in grok.py, 1 DegradedError wrapper in separator.py, 3 in translate.py/tts.py after retry exhaustion); `has_audio_track` silent failure fixed (P3.5 miss closed). 337/337 tests pass. Rule 4 enforced. |
+| **P6.A** | **Pipeline Throughput / GPU Utilization** | Done | Claude+User | 2026-04-08 | 2026-04-08 | PASS | PASS | [P6.A](reports/P6.A-pipeline-throughput.md) | New `pipeline/gpu_state.py` (sticky GPU/CPU + empty_cuda_cache); Whisper LRU `OrderedDict` cache (medium+large-v3, default size 2); Demucs in-process `Separator` cache + subprocess fallback; EasyOCR `_get_ocr_reader` drops gpu arg; `empty_cuda_cache()` post-job; new `GPUConfig` dataclass with 3 env overrides. 28 new tests, 337 → 365 pass. |
+| **P6.B** | **Cold-Start + Setup Automation** | Not Started | Claude+User | — | — | — | — | — | Multi-stage Dockerfile pre-baking models; GHCR auto-build via GitHub Actions; bash installer with resume; dual-tunnel start script (ngrok + cloudflared) |
+| **P6.C** | **Cost / GPU Management** | Not Started | Claude+User | — | — | — | — | — | `/api/gpu` endpoint; VRAM guard fail-loud; ETA estimator; auto-stop verification + tests |
 
 Status values: `Not Started`, `In Progress`, `Blocked`, `Done`, `Done w/ Exception`.
 
@@ -61,6 +64,7 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`, `Done w/ Excepti
 |---|---|---|---|---|
 | 2026-04-08 | P5.0 | [P5.0-tempdir-migration.md](reports/P5.0-tempdir-migration.md) | PASS | Claude Opus 4.6 |
 | 2026-04-08 | P5.1 | [P5.1-exception-adoption.md](reports/P5.1-exception-adoption.md) | PASS | Claude Opus 4.6 |
+| 2026-04-08 | P6.A | [P6.A-pipeline-throughput.md](reports/P6.A-pipeline-throughput.md) | PASS | Claude Opus 4.6 |
 
 ## 6) Session Kickoff Checklist (Copy To New Session)
 ```text

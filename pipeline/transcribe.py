@@ -1,52 +1,119 @@
 import json
 import os
 import threading
+from collections import OrderedDict
 
 from faster_whisper import WhisperModel
 
+from pipeline import gpu_state
 from pipeline.config import cfg
 from pipeline.logger import get_logger
 
 log = get_logger("Transcribe")
 
 
-# ─── Global model cache (load once, reuse across jobs) ───────────────────────
-_model_cache: dict[str, WhisperModel] = {}
+# ─── Process-wide LRU model cache (load once, reuse across jobs) ─────────────
+#
+# Cache key is (model_name, device, compute_type) so the same model can be
+# cached on both GPU and CPU if the runtime falls back. Eviction is LRU at
+# `cfg.gpu.whisper_cache_size` (default 2 = fits medium + large-v3 on a 3060).
+_model_cache: "OrderedDict[tuple[str, str, str], WhisperModel]" = OrderedDict()
 _model_lock = threading.Lock()
 
 
+def _make_cache_key(model_name: str, device: str, compute_type: str) -> tuple[str, str, str]:
+    return (model_name, device, compute_type)
+
+
+def _evict_if_needed() -> None:
+    """Pop the oldest entry if cache exceeds the configured size."""
+    while len(_model_cache) > cfg.gpu.whisper_cache_size:
+        evicted_key, evicted_model = _model_cache.popitem(last=False)
+        log.info(f"LRU evicting Whisper model: {evicted_key}")
+        del evicted_model
+        gpu_state.empty_cuda_cache()
+
+
+def _try_load_gpu(model_name: str) -> WhisperModel | None:
+    """Try to load Whisper on GPU. Returns None on failure (caller falls back)."""
+    if not gpu_state.should_use_gpu():
+        return None
+    try:
+        model = WhisperModel(
+            model_name, device="cuda", compute_type=cfg.transcribe.gpu_compute_type
+        )
+        log.info(f"Whisper loaded on GPU (CUDA): {model_name}")
+        return model
+    except Exception as e:
+        log.warning(f"Whisper GPU init failed for {model_name} ({e}), using CPU...")
+        gpu_state.mark_gpu_unavailable(f"Whisper GPU init failed: {e}")
+        return None
+
+
+def _load_cpu(model_name: str) -> WhisperModel:
+    """Load Whisper on CPU. Always succeeds (or raises if model name invalid)."""
+    model = WhisperModel(
+        model_name, device="cpu", compute_type=cfg.transcribe.cpu_compute_type
+    )
+    log.info(f"Whisper loaded on CPU: {model_name}")
+    return model
+
+
 def _get_model(model_name: str) -> WhisperModel:
-    """Get or create a cached Whisper model. Thread-safe."""
+    """Get or create a cached Whisper model. Thread-safe LRU."""
     with _model_lock:
-        if model_name in _model_cache:
-            log.info(f"Reusing cached Whisper model: {model_name}")
-            return _model_cache[model_name]
+        # Determine target device based on sticky GPU state
+        device = "cuda" if gpu_state.should_use_gpu() else "cpu"
+        compute_type = (
+            cfg.transcribe.gpu_compute_type if device == "cuda"
+            else cfg.transcribe.cpu_compute_type
+        )
+        key = _make_cache_key(model_name, device, compute_type)
 
-        log.info(f"Loading Whisper model: {model_name}")
+        # Cache hit: move to end (LRU recency) and return
+        if key in _model_cache:
+            _model_cache.move_to_end(key)
+            log.info(f"Reusing cached Whisper model: {model_name} ({device})")
+            return _model_cache[key]
 
-        # Try GPU first
-        try:
-            model = WhisperModel(model_name, device="cuda", compute_type=cfg.transcribe.gpu_compute_type)
-            log.info("Model loaded on GPU (CUDA)")
-            _model_cache[model_name] = model
-            return model
-        except Exception as e:
-            log.warning(f"GPU init failed ({e}), using CPU...")
+        # Cache miss: load fresh
+        log.info(f"Loading Whisper model: {model_name} ({device})")
+        model = _try_load_gpu(model_name) if device == "cuda" else None
+        if model is None:
+            # Either GPU was already disabled, or just failed → use CPU
+            cpu_key = _make_cache_key(model_name, "cpu", cfg.transcribe.cpu_compute_type)
+            if cpu_key in _model_cache:
+                _model_cache.move_to_end(cpu_key)
+                return _model_cache[cpu_key]
+            model = _load_cpu(model_name)
+            _model_cache[cpu_key] = model
+        else:
+            _model_cache[key] = model
 
-        model = WhisperModel(model_name, device="cpu", compute_type=cfg.transcribe.cpu_compute_type)
-        log.info("Model loaded on CPU")
-        _model_cache[model_name] = model
+        _evict_if_needed()
         return model
 
 
 def _fallback_to_cpu(model_name: str) -> WhisperModel:
-    """Replace cached GPU model with CPU model after runtime failure."""
+    """Replace cached GPU model with CPU model after runtime failure.
+
+    Marks GPU unavailable process-wide so subsequent jobs don't waste a
+    GPU init attempt.
+    """
     with _model_lock:
-        log.warning("GPU runtime error — switching to CPU model")
-        model = WhisperModel(model_name, device="cpu", compute_type=cfg.transcribe.cpu_compute_type)
-        _model_cache[model_name] = model
-        log.info("CPU model ready")
-        return model
+        log.warning(f"Whisper GPU runtime error — switching {model_name} to CPU")
+        gpu_state.mark_gpu_unavailable(f"Whisper runtime error on {model_name}")
+        # Evict any GPU entry for this model
+        gpu_key = _make_cache_key(model_name, "cuda", cfg.transcribe.gpu_compute_type)
+        if gpu_key in _model_cache:
+            del _model_cache[gpu_key]
+            gpu_state.empty_cuda_cache()
+        # Load + cache CPU model
+        cpu_key = _make_cache_key(model_name, "cpu", cfg.transcribe.cpu_compute_type)
+        if cpu_key not in _model_cache:
+            _model_cache[cpu_key] = _load_cpu(model_name)
+            _evict_if_needed()
+        return _model_cache[cpu_key]
 
 
 def transcribe(

@@ -2,7 +2,7 @@
 
 import os
 import pytest
-from pipeline.config import Config, AudioConfig, TranslateConfig, WebConfig, cfg
+from pipeline.config import Config, AudioConfig, TranslateConfig, WebConfig, GPUConfig, cfg
 
 
 class TestConfigDefaults:
@@ -55,6 +55,12 @@ class TestConfigDefaults:
         assert c.web.job_timeout == 30 * 60
         assert c.web.idle_timeout == 90 * 60
 
+    def test_gpu_defaults(self):
+        c = Config()
+        assert c.gpu.whisper_cache_size == 2
+        assert c.gpu.vram_min_free_mb == 2048
+        assert c.gpu.force_cpu is False
+
     def test_ffmpeg_timeouts(self):
         c = Config()
         assert c.ffmpeg.timeout_short == 30
@@ -83,6 +89,7 @@ class TestConfigSingleton:
         assert cfg.ocr is not None
         assert cfg.burn is not None
         assert cfg.ffmpeg is not None
+        assert cfg.gpu is not None
         assert cfg.web is not None
 
 
@@ -103,3 +110,23 @@ class TestConfigEnvOverride:
         monkeypatch.setenv("PORT", "not_a_number")
         c = Config.load()
         assert c.web.port == 3456  # default
+
+    def test_whisper_cache_size_override(self, monkeypatch):
+        monkeypatch.setenv("WHISPER_CACHE_SIZE", "3")
+        c = Config.load()
+        assert c.gpu.whisper_cache_size == 3
+
+    def test_vram_min_free_mb_override(self, monkeypatch):
+        monkeypatch.setenv("VRAM_MIN_FREE_MB", "4096")
+        c = Config.load()
+        assert c.gpu.vram_min_free_mb == 4096
+
+    def test_force_cpu_override_true(self, monkeypatch):
+        monkeypatch.setenv("FORCE_CPU", "1")
+        c = Config.load()
+        assert c.gpu.force_cpu is True
+
+    def test_force_cpu_override_false(self, monkeypatch):
+        monkeypatch.setenv("FORCE_CPU", "0")
+        c = Config.load()
+        assert c.gpu.force_cpu is False

@@ -8,6 +8,7 @@ import threading
 import cv2
 import numpy as np
 
+from pipeline import gpu_state
 from pipeline.config import cfg
 from pipeline.logger import get_logger
 
@@ -16,18 +17,42 @@ log = get_logger("OCR")
 # ---------------------------------------------------------------------------
 # EasyOCR reader cache (avoid re-loading models every call)
 # ---------------------------------------------------------------------------
+# Cache key is sorted lang list only — device is decided dynamically by
+# gpu_state.should_use_gpu(), so the same Reader is reused regardless of
+# which device the worker process happens to be on. If the GPU init fails
+# inside easyocr.Reader, mark_gpu_unavailable() flips the sticky flag so
+# subsequent loaders go straight to CPU.
 _ocr_lock = threading.Lock()
 _ocr_readers: dict[str, "easyocr.Reader"] = {}
 
 
-def _get_ocr_reader(langs: list[str], gpu: bool = True) -> "easyocr.Reader":
-    """Get or create a cached EasyOCR Reader for the given languages."""
+def _get_ocr_reader(langs: list[str]) -> "easyocr.Reader":
+    """Get or create a cached EasyOCR Reader. Thread-safe.
+
+    Reads `gpu_state.should_use_gpu()` to decide GPU vs CPU. On GPU init
+    failure, marks GPU unavailable process-wide and retries on CPU.
+    """
     import easyocr
-    key = f"{','.join(sorted(langs))}|gpu={gpu}"
+    key = ",".join(sorted(langs))
     with _ocr_lock:
-        if key not in _ocr_readers:
-            _ocr_readers[key] = easyocr.Reader(langs, gpu=gpu)
-        return _ocr_readers[key]
+        if key in _ocr_readers:
+            return _ocr_readers[key]
+
+        use_gpu = gpu_state.should_use_gpu()
+        try:
+            reader = easyocr.Reader(langs, gpu=use_gpu)
+            log.info(f"Loaded EasyOCR Reader: langs={langs} gpu={use_gpu}")
+        except Exception as e:
+            if not use_gpu:
+                # Already on CPU and still failing — propagate
+                raise
+            log.warning(f"EasyOCR GPU init failed ({e}), retrying on CPU...")
+            gpu_state.mark_gpu_unavailable(f"EasyOCR GPU init failed: {e}")
+            reader = easyocr.Reader(langs, gpu=False)
+            log.info(f"Loaded EasyOCR Reader: langs={langs} gpu=False (fallback)")
+
+        _ocr_readers[key] = reader
+        return reader
 
 
 # ---------------------------------------------------------------------------
@@ -177,11 +202,8 @@ def detect_text_regions(
 
     # Always include English alongside the source language
     langs = list(set([ocr_lang, "en"]))
-    try:
-        reader = _get_ocr_reader(langs, gpu=True)
-    except RuntimeError:
-        log.warning("GPU not available, falling back to CPU for OCR...")
-        reader = _get_ocr_reader(langs, gpu=False)
+    # GPU/CPU selection + fallback now handled inside _get_ocr_reader via gpu_state
+    reader = _get_ocr_reader(langs)
 
     results = []
     for i, frame in enumerate(frame_paths):

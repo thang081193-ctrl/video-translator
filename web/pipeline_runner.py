@@ -18,6 +18,7 @@ from pipeline.subtitle import generate_srt
 from pipeline.burn import burn_subtitles, burn_ocr_overlay, burn_with_overlays
 from pipeline.dub import build_dubbed_audio, dub_video, get_audio_duration, DEFAULT_VOICES
 from pipeline.config import cfg
+from pipeline.gpu_state import empty_cuda_cache
 from pipeline.logger import get_logger
 
 log = get_logger("Pipeline")
@@ -271,5 +272,12 @@ def run_pipeline(
         temp_path = os.path.join(job_dir, temp_dir)
         if os.path.isdir(temp_path):
             shutil.rmtree(temp_path, ignore_errors=True)
+
+    # Release fragmented VRAM between jobs (P6.A). Best-effort: never fail
+    # a completed job because cleanup couldn't run.
+    try:
+        empty_cuda_cache()
+    except Exception:
+        pass
 
     return result

@@ -26,6 +26,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class AudioConfig:
     """Audio extraction settings."""
@@ -137,6 +144,17 @@ class FFmpegConfig:
 
 
 @dataclass(frozen=True)
+class GPUConfig:
+    """GPU resource management settings (P6.A).
+
+    All values overridable via env vars in `Config.load()`.
+    """
+    whisper_cache_size: int = 2          # WHISPER_CACHE_SIZE — LRU cache for Whisper models (medium + large-v3)
+    vram_min_free_mb: int = 2048         # VRAM_MIN_FREE_MB — fail-loud if Demucs requested with less free VRAM
+    force_cpu: bool = False              # FORCE_CPU — hard override: never attempt CUDA on any model
+
+
+@dataclass(frozen=True)
 class WebConfig:
     """Web server settings."""
     host: str = "0.0.0.0"
@@ -162,6 +180,7 @@ class Config:
     ocr: OCRConfig = field(default_factory=OCRConfig)
     burn: BurnConfig = field(default_factory=BurnConfig)
     ffmpeg: FFmpegConfig = field(default_factory=FFmpegConfig)
+    gpu: GPUConfig = field(default_factory=GPUConfig)
     web: WebConfig = field(default_factory=WebConfig)
 
     @staticmethod
@@ -173,6 +192,11 @@ class Config:
             ),
             tts=TTSConfig(
                 concurrency=_env_int("TTS_CONCURRENCY", 5),
+            ),
+            gpu=GPUConfig(
+                whisper_cache_size=_env_int("WHISPER_CACHE_SIZE", 2),
+                vram_min_free_mb=_env_int("VRAM_MIN_FREE_MB", 2048),
+                force_cpu=_env_bool("FORCE_CPU", False),
             ),
             web=WebConfig(
                 port=_env_int("PORT", 3456),
