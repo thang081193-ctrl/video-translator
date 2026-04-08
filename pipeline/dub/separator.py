@@ -10,14 +10,19 @@ from pipeline.logger import get_logger
 log = get_logger("Dub")
 
 
-def separate_audio(audio_path: str, output_dir: str, model: str = "htdemucs") -> dict[str, str]:
+def separate_audio(audio_path: str, demucs_dir: str, model: str = "htdemucs") -> dict[str, str]:
     """
     Separate audio into vocals and accompaniment using Demucs.
-    Returns dict with paths: {"vocals": ..., "no_vocals": ...}
+
+    `demucs_dir` must be an already-created directory owned by the caller
+    (typically from a `temp_dir("demucs", ...)` context manager). Demucs
+    writes its output tree under this path.
+
+    Returns dict with paths: {"vocals": ..., "no_vocals": ...}. Note: these
+    paths live inside `demucs_dir`; read them BEFORE the caller exits its
+    context manager or the files will be cleaned up.
     """
     log.info(f"Separating audio with Demucs ({model})")
-    demucs_out = os.path.join(output_dir, "_demucs_temp")
-    os.makedirs(demucs_out, exist_ok=True)
 
     # Monkey-patch torchaudio.save to use soundfile (torchcodec broken on Windows)
     import torchaudio
@@ -38,7 +43,7 @@ def separate_audio(audio_path: str, output_dir: str, model: str = "htdemucs") ->
             demucs_main([
                 "--two-stems", "vocals",
                 "-n", model,
-                "-o", demucs_out,
+                "-o", demucs_dir,
                 audio_path,
             ])
         except RuntimeError:
@@ -49,14 +54,14 @@ def separate_audio(audio_path: str, output_dir: str, model: str = "htdemucs") ->
                 "--two-stems", "vocals",
                 "-n", model,
                 "-d", "cpu",
-                "-o", demucs_out,
+                "-o", demucs_dir,
                 audio_path,
             ])
     finally:
         torchaudio.save = _original_save
 
     base_name = os.path.splitext(os.path.basename(audio_path))[0]
-    stem_dir = os.path.join(demucs_out, model, base_name)
+    stem_dir = os.path.join(demucs_dir, model, base_name)
 
     return {
         "vocals": os.path.join(stem_dir, "vocals.wav"),

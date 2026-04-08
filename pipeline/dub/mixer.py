@@ -2,12 +2,12 @@
 
 import asyncio
 import os
-import shutil
 import subprocess
 
 from pipeline.audio import check_ffmpeg
 from pipeline.config import cfg
 from pipeline.logger import get_logger
+from pipeline.utils import temp_dir
 
 from .separator import get_audio_duration, separate_audio
 from .tts import (
@@ -20,45 +20,21 @@ from .tts import (
 log = get_logger("Dub")
 
 
-def build_dubbed_audio(
+def _generate_tts_pieces(
     segments: list[dict],
-    lang: str,
-    output_path: str,
-    output_dir: str,
-    custom_voice: str | None = None,
-    audio_mode: str = "custom_bgm",
-    bgm_path: str | None = None,
-    bgm_volume: float = 0.25,
-    original_audio_path: str | None = None,
-    video_duration: float | None = None,
-) -> str:
+    voice: str,
+    tts_dir: str,
+) -> list[tuple[float, float, str]]:
+    """Generate TTS audio for each segment and speed-adjust to fit timing.
+
+    Runs edge-tts concurrently, then applies atempo sequentially. All files
+    are written inside `tts_dir`. Returns a list of (start, end, path) tuples
+    for segments that produced audio; empty segments and zero-duration
+    segments are skipped.
+
+    Raises RuntimeError if zero TTS pieces were produced (will become
+    FatalError in P5.1).
     """
-    Build complete dubbed audio track:
-    1. Generate TTS for each segment
-    2. Speed-adjust to fit subtitle timing
-    3. Concat with silence gaps
-    4. Mix with background music
-
-    audio_mode: "keep_original_bgm" or "custom_bgm"
-    Returns path to final audio file.
-    """
-    check_ffmpeg()
-    voice = get_voice_for_lang(lang, custom_voice)
-
-    if audio_mode == "custom_bgm":
-        if not bgm_path or not os.path.isfile(bgm_path):
-            raise FileNotFoundError(f"Background music file not found: {bgm_path}")
-    elif audio_mode == "keep_original_bgm":
-        if not original_audio_path or not os.path.isfile(original_audio_path):
-            raise FileNotFoundError("Original audio file required for keep_original_bgm mode")
-
-    tts_dir = os.path.join(output_dir, "_tts_temp")
-    os.makedirs(tts_dir, exist_ok=True)
-
-    # Step 1: Generate TTS + speed adjust for each segment (concurrent)
-    audio_pieces = []  # list of (start_time, end_time, audio_path)
-
-    # Prepare segment tasks
     tts_tasks = []
     for i, seg in enumerate(segments):
         text = seg.get("translated_text", seg.get("text", ""))
@@ -73,14 +49,12 @@ def build_dubbed_audio(
         tts_adjusted = os.path.join(tts_dir, f"seg_{i:04d}.wav")
         tts_tasks.append((i, seg_start, seg_end, target_duration, text, tts_raw, tts_adjusted))
 
-    # Generate all TTS concurrently using async event loop + gather
+    audio_pieces: list[tuple[float, float, str]] = []
     if tts_tasks:
         log.info(f"Generating TTS for {len(tts_tasks)} segments concurrently...")
-
         asyncio.run(_batch_tts(tts_tasks, voice))
         log.info("TTS done — speed adjusting...")
 
-        # Speed adjust sequentially (fast ffmpeg calls)
         for i, seg_start, seg_end, target_duration, _, tts_raw, tts_adjusted in tts_tasks:
             adjust_speed(tts_raw, target_duration, tts_adjusted)
             audio_pieces.append((seg_start, seg_end, tts_adjusted))
@@ -88,10 +62,20 @@ def build_dubbed_audio(
     if not audio_pieces:
         raise RuntimeError("No TTS segments generated")
 
-    # Step 2: Build full audio track with silence gaps
-    log.info("Concatenating TTS segments...")
-    concat_list_path = os.path.join(tts_dir, "concat_list.txt")
-    concat_pieces = []
+    return audio_pieces
+
+
+def _collect_concat_pieces(
+    audio_pieces: list[tuple[float, float, str]],
+    video_duration: float | None,
+    tts_dir: str,
+) -> list[str]:
+    """Interleave TTS segments with silence gaps to match video timing.
+
+    Returns an ordered list of audio file paths (TTS + silence fillers) ready
+    for ffmpeg concat. All silence files are written inside `tts_dir`.
+    """
+    concat_pieces: list[str] = []
 
     # Silence before first segment
     if audio_pieces[0][0] > 0.01:
@@ -119,13 +103,21 @@ def build_dubbed_audio(
         _generate_silence(total_duration - last_end, silence_path)
         concat_pieces.append(silence_path)
 
-    # Write concat file
+    return concat_pieces
+
+
+def _ffmpeg_concat(concat_pieces: list[str], tts_dir: str) -> str:
+    """Write an ffmpeg concat list and produce a single WAV track.
+
+    Returns the path to `dubbed_raw.wav` inside `tts_dir`.
+    """
+    log.info("Concatenating TTS segments...")
+    concat_list_path = os.path.join(tts_dir, "concat_list.txt")
     with open(concat_list_path, "w", encoding="utf-8") as f:
         for piece in concat_pieces:
             escaped = piece.replace("\\", "/").replace("'", "'\\''")
             f.write(f"file '{escaped}'\n")
 
-    # Concat all pieces
     dubbed_raw = os.path.join(tts_dir, "dubbed_raw.wav")
     subprocess.run(
         [
@@ -139,24 +131,27 @@ def build_dubbed_audio(
         ],
         capture_output=True, text=True, check=True, timeout=cfg.ffmpeg.timeout_default,
     )
+    return dubbed_raw
 
-    # Step 3: Mix with background music
-    if audio_mode == "keep_original_bgm":
-        log.info("Separating original audio (Demucs)...")
-        stems = separate_audio(original_audio_path, output_dir)
-        bgm_source = stems["no_vocals"]
-        loop_bgm = False
-    else:
-        bgm_source = bgm_path
-        loop_bgm = True
 
+def _mix_voice_and_bgm(
+    dubbed_raw: str,
+    bgm_source: str,
+    loop_bgm: bool,
+    audio_mode: str,
+    bgm_volume: float,
+    output_path: str,
+) -> None:
+    """Mix dubbed voice track with background music into final output file.
+
+    bgm_volume is 0.05–0.50 from the slider. For keep_original_bgm mode we
+    want BGM close to its original loudness, so we scale it higher (the
+    slider acts as a relative mix ratio). Voice is kept at a comfortable
+    boost above BGM.
+    """
     log.info(f"Mixing with background music (volume={bgm_volume:.0%})...")
     bgm_input_args = ["-stream_loop", "-1", "-i", bgm_source] if loop_bgm else ["-i", bgm_source]
 
-    # bgm_volume is 0.05–0.50 from the slider.
-    # For keep_original_bgm mode we want BGM close to its original loudness,
-    # so we scale it higher (the slider acts as a relative mix ratio).
-    # Voice is kept at a comfortable boost above BGM.
     if audio_mode == "keep_original_bgm":
         bgm_vol = max(bgm_volume * cfg.dub.original_bgm_multiplier, cfg.dub.original_bgm_min)
         voice_vol = cfg.dub.original_voice_vol
@@ -179,10 +174,60 @@ def build_dubbed_audio(
         capture_output=True, text=True, check=True, timeout=cfg.ffmpeg.timeout_default,
     )
 
-    # Cleanup demucs temp
-    demucs_temp = os.path.join(output_dir, "_demucs_temp")
-    if os.path.isdir(demucs_temp):
-        shutil.rmtree(demucs_temp, ignore_errors=True)
+
+def build_dubbed_audio(
+    segments: list[dict],
+    lang: str,
+    output_path: str,
+    output_dir: str,
+    custom_voice: str | None = None,
+    audio_mode: str = "custom_bgm",
+    bgm_path: str | None = None,
+    bgm_volume: float = 0.25,
+    original_audio_path: str | None = None,
+    video_duration: float | None = None,
+) -> str:
+    """
+    Build complete dubbed audio track:
+    1. Generate TTS for each segment
+    2. Speed-adjust to fit subtitle timing
+    3. Concat with silence gaps
+    4. Mix with background music
+
+    audio_mode: "keep_original_bgm" or "custom_bgm"
+    Returns path to final audio file.
+
+    Scratch directories (_tts_temp, _demucs_temp) are managed by temp_dir()
+    context managers — guaranteed cleanup on both success and exception paths.
+    """
+    check_ffmpeg()
+    voice = get_voice_for_lang(lang, custom_voice)
+
+    if audio_mode == "custom_bgm":
+        if not bgm_path or not os.path.isfile(bgm_path):
+            raise FileNotFoundError(f"Background music file not found: {bgm_path}")
+    elif audio_mode == "keep_original_bgm":
+        if not original_audio_path or not os.path.isfile(original_audio_path):
+            raise FileNotFoundError("Original audio file required for keep_original_bgm mode")
+
+    with temp_dir("tts", base_dir=output_dir) as tts_dir:
+        audio_pieces = _generate_tts_pieces(segments, voice, tts_dir)
+        concat_pieces = _collect_concat_pieces(audio_pieces, video_duration, tts_dir)
+        dubbed_raw = _ffmpeg_concat(concat_pieces, tts_dir)
+
+        if audio_mode == "keep_original_bgm":
+            log.info("Separating original audio (Demucs)...")
+            with temp_dir("demucs", base_dir=output_dir) as demucs_dir:
+                stems = separate_audio(original_audio_path, demucs_dir)
+                _mix_voice_and_bgm(
+                    dubbed_raw, stems["no_vocals"], loop_bgm=False,
+                    audio_mode=audio_mode, bgm_volume=bgm_volume, output_path=output_path,
+                )
+        else:
+            _mix_voice_and_bgm(
+                dubbed_raw, bgm_path, loop_bgm=True,
+                audio_mode=audio_mode, bgm_volume=bgm_volume, output_path=output_path,
+            )
 
     log.info(f"Dubbed audio: {output_path}")
     return output_path
