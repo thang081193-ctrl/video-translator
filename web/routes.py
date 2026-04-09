@@ -43,6 +43,25 @@ async def health_check():
     return {"status": "ok"}
 
 
+@router.get("/gpu")
+async def gpu_stats():
+    """GPU statistics endpoint (P6.C).
+
+    Returns VRAM/temperature/utilization from nvidia-smi + the state of
+    the P6.A in-process model caches (Whisper LRU, Demucs separator,
+    EasyOCR readers) + sticky GPU/CPU flag.
+
+    Never raises — on error returns `{"available": False, "error": ...}`.
+    Safe to poll from web UI without auth (no sensitive data exposed).
+    """
+    try:
+        from pipeline.gpu_stats import collect_gpu_stats
+        return collect_gpu_stats()
+    except Exception as e:
+        log.warning(f"/api/gpu failed to collect stats: {e}")
+        return {"available": False, "error": str(e)}
+
+
 @router.post("/translate")
 async def start_translation(
     video: UploadFile = File(...),
@@ -149,6 +168,7 @@ async def get_status(job_id: str):
         "total_steps": job["total_steps"],
         "step_label": job["step_label"],
         "progress": job["progress"],
+        "eta_seconds": job.get("eta_seconds", 0),
         "error": job["error"],
         "files": list(job["files"]),
     }

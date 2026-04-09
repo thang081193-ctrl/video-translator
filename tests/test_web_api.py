@@ -25,6 +25,50 @@ class TestHealthEndpoint:
         assert r.json()["status"] == "ok"
 
 
+class TestGpuEndpoint:
+    """P6.C /api/gpu endpoint contract."""
+
+    def test_gpu_endpoint_returns_200(self, client):
+        """Always returns 200, even if no GPU present."""
+        r = client.get("/api/gpu")
+        assert r.status_code == 200
+
+    def test_gpu_response_always_has_available_key(self, client):
+        """Contract: always includes `available` bool regardless of GPU presence."""
+        r = client.get("/api/gpu")
+        data = r.json()
+        assert "available" in data
+        assert isinstance(data["available"], bool)
+
+    def test_gpu_response_has_sticky_flag(self, client):
+        """Always reports force_cpu_sticky (from gpu_state)."""
+        r = client.get("/api/gpu")
+        data = r.json()
+        assert "force_cpu_sticky" in data
+        assert isinstance(data["force_cpu_sticky"], bool)
+
+    def test_gpu_response_has_cache_info(self, client):
+        """Always reports cache state regardless of GPU availability."""
+        r = client.get("/api/gpu")
+        data = r.json()
+        assert "whisper_cached_models" in data
+        assert "ocr_cached_langs" in data
+        assert "demucs_cached" in data
+        assert isinstance(data["whisper_cached_models"], list)
+        assert isinstance(data["ocr_cached_langs"], list)
+        assert isinstance(data["demucs_cached"], list)
+
+    def test_gpu_endpoint_never_500s(self, client):
+        """Even if subprocess crashes, endpoint must return valid JSON."""
+        from unittest.mock import patch
+        with patch("pipeline.gpu_stats.collect_gpu_stats", side_effect=RuntimeError("boom")):
+            r = client.get("/api/gpu")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["available"] is False
+        assert "error" in data
+
+
 class TestLanguagesEndpoint:
     """Strict contract tests — catches drift, ordering, mismatches."""
 

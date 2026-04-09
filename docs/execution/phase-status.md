@@ -15,7 +15,7 @@ This file is the single source of truth for implementation progress across sessi
 - Last Updated: 2026-04-08
 - Current Owner: Claude + User
 - Current Branch: main
-- Current Focus: P6.A + P6.B Done (409/409 tests pass). P6.C In Progress (cost / GPU mgmt). Post-merge manual action: flip GHCR package visibility to Public after first GHA build.
+- Current Focus: **Phase 6 COMPLETE** — P6.A + P6.B + P6.C all Done (452/452 tests pass + live smoketest on real RTX 3060 Ti). Post-merge manual action: flip GHCR package visibility to Public after first GHA build.
 - Overall Health: Green
 - Key Blockers: None
 - Next Milestone Date: TBD
@@ -42,7 +42,7 @@ This file is the single source of truth for implementation progress across sessi
 | **P5.1** | **Custom Exception Adoption + has_audio_track Fix** | Done | Claude+User | 2026-04-08 | 2026-04-08 | PASS | PASS | [P5.1](reports/P5.1-exception-adoption.md) | 22 raises migrated (16 FatalError, 2 TransientError split in grok.py, 1 DegradedError wrapper in separator.py, 3 in translate.py/tts.py after retry exhaustion); `has_audio_track` silent failure fixed (P3.5 miss closed). 337/337 tests pass. Rule 4 enforced. |
 | **P6.A** | **Pipeline Throughput / GPU Utilization** | Done | Claude+User | 2026-04-08 | 2026-04-08 | PASS | PASS | [P6.A](reports/P6.A-pipeline-throughput.md) | New `pipeline/gpu_state.py` (sticky GPU/CPU + empty_cuda_cache); Whisper LRU `OrderedDict` cache (medium+large-v3, default size 2); Demucs in-process `Separator` cache + subprocess fallback; EasyOCR `_get_ocr_reader` drops gpu arg; `empty_cuda_cache()` post-job; new `GPUConfig` dataclass with 3 env overrides. 28 new tests, 337 → 365 pass. |
 | **P6.B** | **Cold-Start + Setup Automation** | Done | Claude+User | 2026-04-08 | 2026-04-09 | PASS | PASS | [P6.B](reports/P6.B-cold-start.md) | Multi-stage Dockerfile (pre-bakes medium+large-v3+EasyOCR+Demucs+ngrok+cloudflared); GHA workflow → GHCR auto-build; bash installer (9 steps, resume, env-var secrets); dual-tunnel start script (ngrok + cloudflared trycloudflare parallel); 4 skill markdown updates; 44 deploy lint tests. 365 → 409 tests pass. |
-| **P6.C** | **Cost / GPU Management** | In Progress | Claude+User | 2026-04-09 | — | — | — | — | `/api/gpu` endpoint; VRAM guard fail-loud; ETA estimator; auto-stop verification + tests |
+| **P6.C** | **Cost / GPU Management** | Done | Claude+User | 2026-04-09 | 2026-04-09 | PASS | PASS | [P6.C](reports/P6.C-cost-gpu-mgmt.md) | New `pipeline/gpu_stats.py` (nvidia-smi parser + cache snapshot); `/api/gpu` endpoint; `_vram_guard_check` fail-loud FatalError; `estimate_eta_seconds` heuristic wired into `/api/status`; preflight disk probe (opt-in via `REQUIRE_DISK_SPACE=1`); 5 auto-stop tests lock in P3 behavior. 409 → 452 tests pass. Live verified on RTX 3060 Ti. |
 
 Status values: `Not Started`, `In Progress`, `Blocked`, `Done`, `Done w/ Exception`.
 
@@ -66,6 +66,7 @@ Status values: `Not Started`, `In Progress`, `Blocked`, `Done`, `Done w/ Excepti
 | 2026-04-08 | P5.1 | [P5.1-exception-adoption.md](reports/P5.1-exception-adoption.md) | PASS | Claude Opus 4.6 |
 | 2026-04-08 | P6.A | [P6.A-pipeline-throughput.md](reports/P6.A-pipeline-throughput.md) | PASS | Claude Opus 4.6 |
 | 2026-04-09 | P6.B | [P6.B-cold-start.md](reports/P6.B-cold-start.md) | PASS | Claude Opus 4.6 |
+| 2026-04-09 | P6.C | [P6.C-cost-gpu-mgmt.md](reports/P6.C-cost-gpu-mgmt.md) | PASS | Claude Opus 4.6 |
 
 ## 6) Session Kickoff Checklist (Copy To New Session)
 ```text

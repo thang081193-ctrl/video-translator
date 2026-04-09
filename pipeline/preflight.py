@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 
@@ -55,6 +56,8 @@ class RuntimeStatus:
     gemini_keys: list[str]
     vertex_keys: list[str]
     invalid_grok_keys: list[str]
+    disk_free_mb_cache: int = 0   # P6.C: disk free at ~/.cache/huggingface
+    disk_free_mb_uploads: int = 0 # P6.C: disk free at ./uploads
 
     @property
     def total_translation_keys(self) -> int:
@@ -63,6 +66,15 @@ class RuntimeStatus:
     @property
     def has_grok(self) -> bool:
         return len(self.grok_keys) > 0
+
+
+def _disk_free_mb(path: str) -> int:
+    """Return free disk space at `path` in MB, or 0 if path doesn't exist / os error."""
+    try:
+        usage = shutil.disk_usage(path)
+        return int(usage.free / (1024 * 1024))
+    except (OSError, FileNotFoundError):
+        return 0
 
 
 def _detect_gpu() -> tuple[bool, int, str | None, str]:
@@ -106,6 +118,12 @@ def collect_runtime_status() -> RuntimeStatus:
 
     cuda_available, gpu_count, gpu_name, gpu_probe_source = _detect_gpu()
 
+    # P6.C: probe disk space at model cache + uploads dirs
+    cache_dir = os.path.expanduser("~/.cache/huggingface")
+    uploads_dir = os.path.join(os.getcwd(), "uploads")
+    disk_free_cache = _disk_free_mb(cache_dir) or _disk_free_mb(os.path.expanduser("~"))
+    disk_free_uploads = _disk_free_mb(uploads_dir) or _disk_free_mb(os.getcwd())
+
     return RuntimeStatus(
         cuda_available=cuda_available,
         gpu_count=gpu_count,
@@ -115,6 +133,8 @@ def collect_runtime_status() -> RuntimeStatus:
         gemini_keys=gemini_keys,
         vertex_keys=vertex_keys,
         invalid_grok_keys=invalid_grok,
+        disk_free_mb_cache=disk_free_cache,
+        disk_free_mb_uploads=disk_free_uploads,
     )
 
 
@@ -152,6 +172,8 @@ def run_preflight(
     require_translation_keys: bool = True,
     require_grok: bool = False,
     require_cuda: bool = False,
+    require_disk_space: bool = False,
+    min_disk_mb: int = 5000,
 ) -> RuntimeStatus:
     status = collect_runtime_status()
     _print_summary(status)
@@ -172,6 +194,14 @@ def run_preflight(
         raise FatalError(
             "REQUIRE_GROK is enabled but no valid Grok key was found. "
             "Set GROK_API_KEYS (keys must start with 'xai-')."
+        )
+
+    # P6.C: optional disk space guard (opt-in via REQUIRE_DISK_SPACE=1)
+    if require_disk_space and status.disk_free_mb_cache < min_disk_mb:
+        raise FatalError(
+            f"Insufficient disk space for model cache: "
+            f"{status.disk_free_mb_cache}MB free, need {min_disk_mb}MB. "
+            f"Clean up /workspace or mount a larger volume."
         )
 
     log.info("=== Preflight OK ===")
@@ -251,11 +281,14 @@ def main():
         if args.require_cuda is not None
         else env_flag("REQUIRE_CUDA", False)
     )
+    # P6.C: opt-in disk guard (Docker + installer set this)
+    require_disk_space = env_flag("REQUIRE_DISK_SPACE", False)
 
     run_preflight(
         require_translation_keys=require_translation_keys,
         require_grok=require_grok,
         require_cuda=require_cuda,
+        require_disk_space=require_disk_space,
     )
 
 

@@ -12,7 +12,9 @@ import queue as _queue
 
 from pipeline.config import cfg
 from pipeline.logger import get_logger
-from web.pipeline_runner import PipelineParams, PipelineResult, run_pipeline, count_steps
+from web.pipeline_runner import (
+    PipelineParams, PipelineResult, run_pipeline, count_steps, estimate_eta_seconds,
+)
 
 log = get_logger("Worker")
 
@@ -49,6 +51,19 @@ def get_job(job_id: str) -> dict | None:
 def create_job(job_id: str, params: PipelineParams, video_name: str) -> dict:
     """Create a new job entry and enqueue it."""
     total_steps = count_steps(params)
+
+    # P6.C: compute advisory ETA for /api/status display. Best-effort —
+    # if ffprobe or nvidia-smi is unavailable, eta defaults to 0.
+    eta_seconds = 0
+    try:
+        from pipeline.dub.separator import get_audio_duration
+        from pipeline.gpu_stats import collect_gpu_stats
+        video_duration = get_audio_duration(params.video_path)
+        gpu_name = collect_gpu_stats().get("name")
+        eta_seconds = estimate_eta_seconds(params, video_duration, gpu_name)
+    except Exception as e:
+        log.debug(f"ETA estimation failed for {job_id}: {e}")
+
     job = {
         "id": job_id,
         "status": "queued",
@@ -56,6 +71,7 @@ def create_job(job_id: str, params: PipelineParams, video_name: str) -> dict:
         "total_steps": total_steps,
         "step_label": "Queued",
         "progress": 0,
+        "eta_seconds": eta_seconds,
         "error": None,
         "files": [],
         "video_path": params.video_path,

@@ -18,7 +18,8 @@ from pipeline.subtitle import generate_srt
 from pipeline.burn import burn_subtitles, burn_ocr_overlay, burn_with_overlays
 from pipeline.dub import build_dubbed_audio, dub_video, get_audio_duration, DEFAULT_VOICES
 from pipeline.config import cfg
-from pipeline.gpu_state import empty_cuda_cache
+from pipeline.errors import FatalError
+from pipeline.gpu_state import empty_cuda_cache, should_use_gpu
 from pipeline.logger import get_logger
 
 log = get_logger("Pipeline")
@@ -70,6 +71,80 @@ def count_steps(params: PipelineParams) -> int:
     return total
 
 
+def _vram_guard_check(params: PipelineParams) -> None:
+    """Fail-loud guard: raise FatalError if VRAM is too low for requested features.
+
+    P6.C user-locked decision: when the user asks for `keep_original_bgm`
+    mode (which requires Demucs source separation) but free VRAM is below
+    `cfg.gpu.vram_min_free_mb`, raise FatalError with a clear message
+    rather than silently downgrading to `custom_bgm`. This surprises
+    fewer users than a silent output change.
+
+    No-op if:
+    - GPU unavailable / stats collection fails (fall through, let the
+      pipeline try and fail later with its own error)
+    - User didn't request dub + keep_original_bgm (nothing to guard)
+    """
+    if not (params.dub and params.audio_mode == "keep_original_bgm"):
+        return  # Demucs not requested, no guard needed
+
+    try:
+        from pipeline.gpu_stats import collect_gpu_stats
+        stats = collect_gpu_stats()
+    except Exception as e:
+        log.debug(f"VRAM guard: stats collection failed ({e}), letting pipeline try")
+        return
+
+    if not stats.get("available"):
+        return  # CPU-only mode or nvidia-smi missing — let the pipeline try
+
+    free_mb = stats.get("vram_free_mb")
+    if free_mb is None:
+        return  # torch.cuda fallback may not report free — skip guard
+
+    if free_mb < cfg.gpu.vram_min_free_mb:
+        raise FatalError(
+            f"Insufficient VRAM for source separation: {free_mb}MB free, "
+            f"need {cfg.gpu.vram_min_free_mb}MB. "
+            f"Disable --keep-original-bgm (use --audio-mode custom_bgm) "
+            f"or restart the server to release cached models."
+        )
+
+
+def estimate_eta_seconds(
+    params: PipelineParams,
+    video_duration_sec: float,
+    gpu_name: str | None,
+) -> int:
+    """Rough ETA heuristic for /api/status UI display (P6.C).
+
+    Based on empirical Whisper-medium-on-RTX-3060 baseline. Advisory
+    only — never used for job-control logic. Returns integer seconds
+    with a minimum of 30.
+
+    Constants are documented in-line (not env-overridable) to keep tests
+    deterministic. Users who want a more accurate ETA should look at
+    past job runtimes instead.
+    """
+    # Baseline: Whisper medium on RTX 3060 processes audio at ~0.35x real time
+    base = max(video_duration_sec, 1.0) * 0.35
+
+    if params.whisper_model == "large-v3":
+        base *= 3.0  # large-v3 is ~3x slower than medium
+
+    if params.dub:
+        base *= 2.0  # TTS is serial, doubles total pipeline time
+
+    if params.translate_ocr:
+        base *= 1.3  # frame extract + OCR + inpaint adds ~30%
+
+    # CPU fallback: roughly 6x slower across the board (empirical)
+    if gpu_name is None or not should_use_gpu():
+        base *= 6.0
+
+    return max(30, int(base))
+
+
 def run_pipeline(
     params: PipelineParams,
     on_progress: ProgressCallback | None = None,
@@ -80,6 +155,7 @@ def run_pipeline(
     This is the shared implementation used by both CLI and Web.
     """
     check_ffmpeg()
+    _vram_guard_check(params)  # P6.C: fail-loud if VRAM insufficient for Demucs
     result = PipelineResult()
 
     job_dir = params.output_dir or os.path.dirname(os.path.abspath(params.video_path))
