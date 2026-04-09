@@ -39,9 +39,14 @@ class TestDockerfile:
         """Whisper medium model must be downloaded at build time."""
         assert "WhisperModel('medium'" in dockerfile
 
-    def test_pre_bakes_whisper_large_v3(self, dockerfile):
-        """P6.B addition: large-v3 also pre-baked (own layer to avoid invalidating medium)."""
-        assert "WhisperModel('large-v3'" in dockerfile
+    def test_large_v3_not_pre_baked_in_image(self, dockerfile):
+        """P6.B fix: large-v3 (~3GB) is NOT pre-baked because HuggingFace
+        download can exceed 60-min GHA timeout. Users download on first use
+        via runtime `--whisper-model large-v3`. Keep this test to prevent
+        regression — someone might re-add the pre-bake and trigger timeouts.
+        """
+        # Accept commented mentions but fail on real RUN line
+        assert "RUN python3 -c \"from faster_whisper import WhisperModel; WhisperModel('large-v3'" not in dockerfile
 
     def test_pre_bakes_easyocr_en_vi(self, dockerfile):
         """EasyOCR en + vi readers must be pre-downloaded."""

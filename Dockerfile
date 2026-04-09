@@ -43,10 +43,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r /tmp/requirements.txt
 
 # Pre-download Whisper medium (~1.5 GB) — own layer
+# Note: large-v3 (~3 GB) is NOT pre-baked because HuggingFace Hub can be
+# very slow (< 1 MB/s), making GHA builds exceed the 60-min timeout.
+# Users running `--whisper-model large-v3` will trigger a one-time
+# download on first use (~3-5 min depending on network). The P6.A LRU
+# cache keeps it resident after the first job.
 RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('medium', device='cpu')"
-
-# Pre-download Whisper large-v3 (~3 GB) — own layer (P6.B addition)
-RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu')"
 
 # Pre-download EasyOCR readers (~1 GB total) — own layer
 RUN python3 -c "import easyocr; easyocr.Reader(['en']); easyocr.Reader(['vi'])"
