@@ -1,8 +1,54 @@
+# Don't ship secrets or local artifacts in the Docker image (P6.B)
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Test + dev artifacts
+tests/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build + temp
+_temp/
+_*_temp/
+_test_ocr_debug/
+_test_*
 uploads/
 *.log
-.env
+*.tar.gz
+VastAI_Upload.tar.gz
+
+# Git + GitHub
 .git/
+.github/
+.gitignore
+.gitattributes
+
+# Editor + OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Claude / dev tooling
 .claude/
-__pycache__/
-_test_*
-*.pyc
+docs/execution/reports/
+docs/execution/phase-status.md
+docs/execution/phase-report-template.md
+
+# Python venv (we use the builder stage's /opt/venv)
+venv/
+.venv/
+env/
+
+# Node (just in case)
+node_modules/

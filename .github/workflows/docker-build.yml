@@ -1,0 +1,106 @@
+name: Build and push Docker image to GHCR
+
+# P6.B — Auto-build the Video Translator Docker image and push to
+# ghcr.io/thang081193-ctrl/video-translator on every commit to main.
+#
+# IMPORTANT: After the first successful build, manually flip the
+# package visibility to Public:
+#   https://github.com/users/thang081193-ctrl/packages/container/video-translator/settings
+#   → "Change visibility" → Public
+# This enables `docker pull ghcr.io/thang081193-ctrl/video-translator:latest`
+# without authentication on Vast.ai instances.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'requirements.txt'
+      - 'pipeline/**'
+      - 'web/**'
+      - 'static/**'
+      - 'deploy/**'
+      - 'video_translator.py'
+      - 'web_app.py'
+      - '.github/workflows/docker-build.yml'
+  workflow_dispatch:  # allow manual trigger from Actions tab
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # first build can take 25+ min, subsequent ~8 min
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free up disk space (Whisper large-v3 needs ~10GB during build)
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=Video Translator
+            org.opencontainers.image.description=Whisper + Gemini + edge-tts video translation pipeline (Vast.ai-ready)
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digest
+        run: echo "Pushed image digest = ${{ steps.meta.outputs.digest }}"
+
+      - name: Summary
+        run: |
+          echo "## Image published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pull command (Vast.ai):**" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️  **First-time setup:** flip package visibility to Public at" >> $GITHUB_STEP_SUMMARY
+          echo "https://github.com/users/${{ github.repository_owner }}/packages/container/${{ github.event.repository.name }}/settings" >> $GITHUB_STEP_SUMMARY
