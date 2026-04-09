@@ -53,16 +53,11 @@ RUN python3 -c "import easyocr; easyocr.Reader(['en']); easyocr.Reader(['vi'])"
 
 # Pre-download Demucs htdemucs (~80 MB) — own layer
 # Try the modern demucs.api first (P6.A in-process path), fall back to
-# pretrained.get_model() if the API isn't exposed in the installed version.
-RUN python3 -c "\
-try:\n\
-    from demucs.api import Separator\n\
-    Separator(model='htdemucs')\n\
-    print('Demucs htdemucs cached via demucs.api.Separator')\n\
-except ImportError:\n\
-    from demucs import pretrained\n\
-    pretrained.get_model('htdemucs')\n\
-    print('Demucs htdemucs cached via demucs.pretrained.get_model')"
+# pretrained.get_model() via shell || if the API isn't exposed in the
+# installed version. Using shell || avoids multi-line python escaping
+# issues in RUN (\n line continuations don't work inside -c "...").
+RUN python3 -c "from demucs.api import Separator; Separator(model='htdemucs'); print('Demucs htdemucs cached via demucs.api.Separator')" \
+    || python3 -c "from demucs import pretrained; pretrained.get_model('htdemucs'); print('Demucs htdemucs cached via demucs.pretrained.get_model')"
 
 # ──────────────────────────────────────────────────────────────────────────
 # STAGE 2 — runtime
