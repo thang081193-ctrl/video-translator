@@ -210,6 +210,8 @@ class Config:
         return Config(
             translate=TranslateConfig(
                 batch_size=_env_int("TRANSLATE_BATCH_SIZE", 20),
+                grok_model=os.getenv("GROK_MODEL", TranslateConfig.grok_model),
+                gemini_model=os.getenv("GEMINI_MODEL", TranslateConfig.gemini_model),
             ),
             tts=TTSConfig(
                 concurrency=_env_int("TTS_CONCURRENCY", 5),
