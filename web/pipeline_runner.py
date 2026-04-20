@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -54,6 +56,25 @@ class PipelineResult:
     files: list[dict] = field(default_factory=list)
     segments_count: int = 0
     detected_lang: str = ""
+    # Per-stage wall-clock timing in seconds. Populated by `_stage()` context
+    # manager wherever it wraps a pipeline step. Advisory only — surfaced via
+    # /api/status so the UI can show cost breakdowns; never used for control.
+    stage_timings: dict[str, float] = field(default_factory=dict)
+
+
+@contextmanager
+def _stage(result: "PipelineResult", name: str):
+    """Record wall-clock time for a pipeline stage into result.stage_timings.
+
+    Uses time.monotonic() so clock adjustments don't corrupt measurements.
+    Always records — even on exception — so a partial run still exposes how
+    far it got before failing.
+    """
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        result.stage_timings[name] = round(time.monotonic() - t0, 3)
 
 
 ProgressCallback = Callable[[int, int, str, int], None]
@@ -176,15 +197,17 @@ def run_pipeline(
 
     # Step 1: Extract audio
     progress("Extracting audio", 5)
-    wav_path = extract_audio(params.video_path, job_dir)
+    with _stage(result, "extract_audio"):
+        wav_path = extract_audio(params.video_path, job_dir)
     progress_update("Extracting audio", 15)
 
     # Step 2: Transcribe
     progress(f"Transcribing ({params.whisper_model})", 20)
-    segments, detected_lang = transcribe(
-        wav_path, model_name=params.whisper_model, source_lang=params.source_lang,
-        cache_dir=job_dir, use_cache=params.use_cache,
-    )
+    with _stage(result, "transcribe"):
+        segments, detected_lang = transcribe(
+            wav_path, model_name=params.whisper_model, source_lang=params.source_lang,
+            cache_dir=job_dir, use_cache=params.use_cache,
+        )
     src_lang = params.source_lang or detected_lang
     result.detected_lang = src_lang
     result.segments_count = len(segments)
@@ -193,10 +216,11 @@ def run_pipeline(
     # Step 3: Translate
     cache_path = os.path.join(job_dir, f"{video_base}.{src_lang}_{params.target_lang}.translated.json")
     progress(f"Translating {src_lang} -> {params.target_lang}", 50)
-    translated_segments = translate_segments(
-        segments, source_lang=src_lang, target_lang=params.target_lang,
-        batch_size=params.batch_size, cache_path=cache_path, use_cache=params.use_cache,
-    )
+    with _stage(result, "translate"):
+        translated_segments = translate_segments(
+            segments, source_lang=src_lang, target_lang=params.target_lang,
+            batch_size=params.batch_size, cache_path=cache_path, use_cache=params.use_cache,
+        )
     progress_update(f"Translating {src_lang} -> {params.target_lang}", 65)
 
     # Step 3.5 (optional): OCR
@@ -204,6 +228,8 @@ def run_pipeline(
     ocr_overlays = None
     if params.translate_ocr:
         progress("Detecting on-screen text (OCR)", 67)
+        _ocr_stage = _stage(result, "ocr")
+        _ocr_stage.__enter__()
         try:
             from pipeline.ocr import (
                 extract_key_frames, detect_text_regions,
@@ -256,12 +282,15 @@ def run_pipeline(
                 shutil.rmtree(frames_dir, ignore_errors=True)
         except ImportError as e:
             log.warning(f"OCR module not available ({e}), skipping...")
+        finally:
+            _ocr_stage.__exit__(None, None, None)
         progress_update("OCR complete", 75)
 
     # Step 4: Generate SRT
     srt_path = os.path.join(job_dir, f"{video_base}.{params.target_lang}.srt")
     progress("Generating subtitles", 76)
-    generate_srt(translated_segments, srt_path, text_key="translated_text")
+    with _stage(result, "srt"):
+        generate_srt(translated_segments, srt_path, text_key="translated_text")
     result.srt_path = srt_path
 
     has_segments = len(translated_segments) > 0
@@ -285,13 +314,14 @@ def run_pipeline(
         dubbed_audio_path = os.path.join(job_dir, f"{video_base}.{params.target_lang}.dubbed.m4a")
         label = "Generating TTS + separating audio" if params.audio_mode == "keep_original_bgm" else "Generating TTS audio"
         progress(label, 78)
-        build_dubbed_audio(
-            translated_segments, lang=params.target_lang,
-            output_path=dubbed_audio_path, output_dir=job_dir,
-            custom_voice=params.tts_voice, audio_mode=params.audio_mode,
-            bgm_path=params.bgm_path, bgm_volume=params.bgm_volume,
-            original_audio_path=original_audio_hq, video_duration=vid_duration,
-        )
+        with _stage(result, "dub"):
+            build_dubbed_audio(
+                translated_segments, lang=params.target_lang,
+                output_path=dubbed_audio_path, output_dir=job_dir,
+                custom_voice=params.tts_voice, audio_mode=params.audio_mode,
+                bgm_path=params.bgm_path, bgm_volume=params.bgm_volume,
+                original_audio_path=original_audio_hq, video_duration=vid_duration,
+            )
         progress_update(label, 88)
 
         # Cleanup HQ audio
@@ -301,7 +331,8 @@ def run_pipeline(
         # Step: Merge
         output_video = os.path.join(job_dir, f"{video_base}.{params.target_lang}.dubbed{video_ext}")
         progress("Merging dubbed audio", 90)
-        dub_video(params.video_path, dubbed_audio_path, output_video)
+        with _stage(result, "merge"):
+            dub_video(params.video_path, dubbed_audio_path, output_video)
         result.dubbed_video = output_video
         result.files.append({"name": os.path.basename(output_video), "type": "video", "label": "Dubbed video"})
         base_video = output_video
@@ -316,15 +347,16 @@ def run_pipeline(
         final_video = os.path.join(job_dir, f"{video_base}.{params.target_lang}.final{video_ext}")
         progress("Burning subtitles/text overlay", 93)
 
-        if ocr_overlays:
-            burn_with_overlays(
-                base_video, ocr_overlays, final_video,
-                srt_path=srt_path if (params.burn and has_segments) else None,
-            )
-        elif params.burn and has_segments:
-            burn_subtitles(base_video, srt_path, final_video, ocr_filter=ocr_filter)
-        elif ocr_filter:
-            burn_ocr_overlay(base_video, ocr_filter, final_video)
+        with _stage(result, "burn"):
+            if ocr_overlays:
+                burn_with_overlays(
+                    base_video, ocr_overlays, final_video,
+                    srt_path=srt_path if (params.burn and has_segments) else None,
+                )
+            elif params.burn and has_segments:
+                burn_subtitles(base_video, srt_path, final_video, ocr_filter=ocr_filter)
+            elif ocr_filter:
+                burn_ocr_overlay(base_video, ocr_filter, final_video)
 
         label = "Dubbed + Subtitles" if can_dub else "Video with text overlay"
         result.burned_video = final_video

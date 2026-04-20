@@ -169,6 +169,7 @@ async def get_status(job_id: str):
         "step_label": job["step_label"],
         "progress": job["progress"],
         "eta_seconds": job.get("eta_seconds", 0),
+        "stage_timings": dict(job.get("stage_timings") or {}),
         "error": job["error"],
         "files": list(job["files"]),
     }

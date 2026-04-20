@@ -76,6 +76,7 @@ def create_job(job_id: str, params: PipelineParams, video_name: str) -> dict:
         "files": [],
         "video_path": params.video_path,
         "video_name": video_name,
+        "stage_timings": {},
     }
     with _jobs_lock:
         jobs[job_id] = job
@@ -140,7 +141,8 @@ def _run_job(job_id: str, params: PipelineParams):
         global last_activity
         last_activity = time.time()
         update_job(job_id, status="done", step=count_steps(params),
-                   step_label="Complete", progress=100, files=result.files)
+                   step_label="Complete", progress=100, files=result.files,
+                   stage_timings=dict(result.stage_timings))
 
     except Exception as e:
         tb = traceback.format_exc()
