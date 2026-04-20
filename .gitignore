@@ -5,6 +5,7 @@ __pycache__/
 *.m4a
 *.tmp
 _tts_temp/
+_tts_cache/
 _demucs_temp/
 _ocr_frames/
 _ocr_overlays/

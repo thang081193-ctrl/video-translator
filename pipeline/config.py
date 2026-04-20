@@ -88,6 +88,11 @@ class TTSConfig:
     timeout: int = 30                 # seconds per TTS request
     output_sample_rate: int = 24000
     output_channels: int = 1
+    # Segment cache: skip regeneration when (voice, text) hash matches.
+    # Disk-backed, LRU eviction by mtime. Shared across jobs in the same process.
+    cache_enabled: bool = True                         # DISABLE_TTS_CACHE=1 to turn off
+    cache_max_bytes: int = 500 * 1024 * 1024           # TTS_CACHE_MB env override
+    cache_evict_to_pct: float = 0.8                    # evict down to 80% of limit
 
 
 @dataclass(frozen=True)
@@ -197,6 +202,8 @@ class Config:
             ),
             tts=TTSConfig(
                 concurrency=_env_int("TTS_CONCURRENCY", 5),
+                cache_enabled=not _env_bool("DISABLE_TTS_CACHE", False),
+                cache_max_bytes=_env_int("TTS_CACHE_MB", 500) * 1024 * 1024,
             ),
             burn=BurnConfig(
                 use_nvenc=_env_bool("USE_NVENC", True),

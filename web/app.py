@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from pipeline.config import cfg
+from pipeline.dub.tts import cleanup_tts_cache
 from pipeline.logger import get_logger
 from web.routes import router
 from web.worker import cleanup_old_jobs, auto_stop_check
@@ -51,6 +52,10 @@ def _maintenance_loop():
             cleanup_old_jobs(UPLOAD_DIR)
         except Exception as e:
             log.error(f"Cleanup error: {e}")
+        try:
+            cleanup_tts_cache()
+        except Exception as e:
+            log.error(f"TTS cache cleanup error: {e}")
         try:
             auto_stop_check()
         except Exception as e:
