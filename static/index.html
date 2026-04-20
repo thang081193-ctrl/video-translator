@@ -207,6 +207,12 @@ body {
   box-shadow: 0 0 0 2px var(--blue-100);
 }
 
+.lang-filter {
+  margin-bottom: 4px;
+  font-size: 13px !important;
+  padding: 6px 10px !important;
+}
+
 /* ─── Toggle Switches ────────────────────────────────────────────── */
 .toggle-row {
   display: flex;
@@ -592,12 +598,14 @@ body {
     <div class="form-grid">
       <div class="form-group">
         <label>Source language</label>
+        <input type="text" id="sourceLangFilter" placeholder="Search..." class="lang-filter" autocomplete="off">
         <select id="sourceLang">
           <option value="">Auto-detect</option>
         </select>
       </div>
       <div class="form-group">
         <label>Target language</label>
+        <input type="text" id="targetLangFilter" placeholder="Search..." class="lang-filter" autocomplete="off">
         <select id="targetLang" required></select>
       </div>
       <div class="form-group">
@@ -820,13 +828,37 @@ let batchStartTime = null;
 const MAX_FILES = 30;
 
 // ─── Load languages ───────────────────────────────────────────────
+let _allLanguages = [];
 fetch('/api/languages').then(r => r.json()).then(data => {
+  _allLanguages = data.languages;
   data.languages.forEach(lang => {
     sourceLang.add(new Option(lang.name, lang.code));
     targetLang.add(new Option(lang.name, lang.code));
   });
   targetLang.value = 'vi';
+  // Hide search filters unless the list is large enough to need them.
+  document.querySelectorAll('.lang-filter').forEach(el => {
+    el.style.display = data.languages.length > 20 ? '' : 'none';
+  });
 });
+
+// Language dropdown search: strips diacritics so "Espanol" matches "Español".
+const _normLang = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function _filterLangSelect(filterInput, selectEl, includeAuto) {
+  const q = _normLang(filterInput.value.trim());
+  const prev = selectEl.value;
+  while (selectEl.options.length) selectEl.remove(0);
+  if (includeAuto) selectEl.add(new Option('Auto-detect', ''));
+  _allLanguages.forEach(lang => {
+    if (!q || _normLang(lang.name).includes(q) || lang.code.includes(q))
+      selectEl.add(new Option(lang.name, lang.code));
+  });
+  selectEl.value = prev;  // restore selection if still visible after filter
+}
+$('sourceLangFilter').addEventListener('input',
+  () => _filterLangSelect($('sourceLangFilter'), sourceLang, true));
+$('targetLangFilter').addEventListener('input',
+  () => _filterLangSelect($('targetLangFilter'), targetLang, false));
 
 // ─── File upload (multi) ─────────────────────────────────────────
 uploadArea.addEventListener('click', () => videoInput.click());
