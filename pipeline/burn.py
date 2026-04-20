@@ -9,6 +9,46 @@ from pipeline.logger import get_logger
 log = get_logger("Burn")
 
 
+# ─── NVENC hardware encoding detection ───────────────────────────────────────
+
+_nvenc_available: bool | None = None
+
+
+def _check_nvenc() -> bool:
+    """Check if NVENC hardware encoder is available in ffmpeg (cached).
+
+    Respects cfg.burn.use_nvenc master switch. Returns False quickly if
+    the flag is disabled or ffmpeg doesn't report h264_nvenc.
+    """
+    global _nvenc_available
+    if not cfg.burn.use_nvenc:
+        return False
+    if _nvenc_available is not None:
+        return _nvenc_available
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=cfg.ffmpeg.timeout_short,
+        )
+        _nvenc_available = "h264_nvenc" in result.stdout
+    except Exception:
+        _nvenc_available = False
+    if _nvenc_available:
+        log.info("NVENC hardware encoder detected — using GPU encoding")
+    return _nvenc_available
+
+
+def _video_encoding_args() -> list[str]:
+    """Return ffmpeg video encoding args: NVENC if available, else CPU libx264."""
+    if _check_nvenc():
+        return [
+            "-c:v", "h264_nvenc",
+            "-preset", cfg.burn.nvenc_preset,
+            "-cq", str(cfg.burn.nvenc_cq),
+        ]
+    return ["-crf", str(cfg.burn.crf), "-preset", cfg.burn.preset]
+
+
 # ─── Filter script helper (Windows cmd length limit workaround) ──────────────
 
 def _write_filter_script(filter_string: str, output_dir: str) -> str:
@@ -44,7 +84,7 @@ def _build_ffmpeg_cmd(
     else:
         cmd += ["-vf", vf_string]
 
-    cmd += ["-crf", str(cfg.burn.crf), "-preset", cfg.burn.preset, "-c:a", "copy", output_path]
+    cmd += _video_encoding_args() + ["-c:a", "copy", output_path]
     return cmd
 
 
@@ -197,7 +237,7 @@ def burn_with_overlays(
     else:
         cmd += ["-filter_complex", filter_complex]
 
-    cmd += ["-map", f"{final_label}", "-map", "0:a", "-crf", str(cfg.burn.crf), "-preset", cfg.burn.preset, output_path]
+    cmd += ["-map", f"{final_label}", "-map", "0:a"] + _video_encoding_args() + [output_path]
 
     log.info(f"Burning {n} overlay(s) into video...")
     subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=cfg.ffmpeg.timeout_burn)

@@ -132,6 +132,11 @@ class BurnConfig:
     crf: int = 18
     preset: str = "medium"
     filter_script_threshold: int = 8000   # chars before switching to filter script file
+    # NVENC hardware encoding (NVIDIA GPU) — 5-10x faster than libx264.
+    # Auto-detected via `ffmpeg -encoders`; falls back to CPU if unavailable.
+    use_nvenc: bool = True                # USE_NVENC — master switch
+    nvenc_preset: str = "p4"              # p1=fastest, p7=slowest/best quality
+    nvenc_cq: int = 20                    # constant quality (lower = better; ~equiv to CRF)
 
 
 @dataclass(frozen=True)
@@ -192,6 +197,9 @@ class Config:
             ),
             tts=TTSConfig(
                 concurrency=_env_int("TTS_CONCURRENCY", 5),
+            ),
+            burn=BurnConfig(
+                use_nvenc=_env_bool("USE_NVENC", True),
             ),
             gpu=GPUConfig(
                 whisper_cache_size=_env_int("WHISPER_CACHE_SIZE", 2),
