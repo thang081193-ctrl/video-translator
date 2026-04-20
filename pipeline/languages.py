@@ -25,7 +25,9 @@ class LanguageSpec:
     voice: str            # Default edge-tts voice ID (xx-XX-NameNeural)
     drawtext_safe: bool   # True if ffmpeg drawtext can render correctly
     speaker_rank: int     # 1 = most spoken (English); used for UI ordering
-    script_family: str    # latin / cjk / arabic / devanagari / cyrillic / bengali / telugu / tamil / greek / thai
+    script_family: str    # latin / cjk / arabic / devanagari / cyrillic / bengali / telugu / tamil / greek /
+                          # thai / hebrew / gujarati / kannada / malayalam / georgian / khmer / burmese /
+                          # sinhala / lao / ethiopic
 
 
 # ─── Master registry: top 30 world languages by total speakers ───────────────
@@ -62,6 +64,54 @@ LANGUAGES: list[LanguageSpec] = [
     LanguageSpec("cs", "Čeština",          "cs-CZ-VlastaNeural",       False, 28, "latin"),
     LanguageSpec("hu", "Magyar",           "hu-HU-NoemiNeural",        False, 29, "latin"),
     LanguageSpec("sv", "Svenska",          "sv-SE-SofieNeural",        False, 30, "latin"),
+    # ─── Phase 7: top 30 → 73 (edge-tts coverage expansion) ────────────────
+    # Ported from local feature branch. Voice IDs produced by a live
+    # `edge_tts.list_voices()` snapshot; all match the xx-XX-NameNeural
+    # pattern. OCR drawtext is False for every new entry (conservative);
+    # real-script font coverage for new scripts is a future OCR task.
+    LanguageSpec("af", "Afrikaans",        "af-ZA-AdriNeural",         False, 31, "latin"),
+    LanguageSpec("am", "አማርኛ",             "am-ET-MekdesNeural",       False, 32, "ethiopic"),
+    LanguageSpec("az", "Azərbaycan",       "az-AZ-BanuNeural",         False, 33, "latin"),
+    LanguageSpec("bg", "Български",        "bg-BG-KalinaNeural",       False, 34, "cyrillic"),
+    LanguageSpec("bs", "Bosanski",         "bs-BA-VesnaNeural",        False, 35, "latin"),
+    LanguageSpec("ca", "Català",           "ca-ES-JoanaNeural",        False, 36, "latin"),
+    LanguageSpec("cy", "Cymraeg",          "cy-GB-NiaNeural",          False, 37, "latin"),
+    LanguageSpec("da", "Dansk",            "da-DK-ChristelNeural",     False, 38, "latin"),
+    LanguageSpec("et", "Eesti",            "et-EE-AnuNeural",          False, 39, "latin"),
+    LanguageSpec("fi", "Suomi",            "fi-FI-NooraNeural",        False, 40, "latin"),
+    LanguageSpec("ga", "Gaeilge",          "ga-IE-OrlaNeural",         False, 41, "latin"),
+    LanguageSpec("gl", "Galego",           "gl-ES-SabelaNeural",       False, 42, "latin"),
+    LanguageSpec("gu", "ગુજરાતી",           "gu-IN-DhwaniNeural",       False, 43, "gujarati"),
+    LanguageSpec("he", "עברית",             "he-IL-HilaNeural",         False, 44, "hebrew"),
+    LanguageSpec("hr", "Hrvatski",         "hr-HR-GabrijelaNeural",    False, 45, "latin"),
+    LanguageSpec("is", "Íslenska",         "is-IS-GudrunNeural",       False, 46, "latin"),
+    LanguageSpec("jv", "Basa Jawa",        "jv-ID-SitiNeural",         False, 47, "latin"),
+    LanguageSpec("ka", "ქართული",           "ka-GE-EkaNeural",          False, 48, "georgian"),
+    LanguageSpec("kk", "Қазақша",           "kk-KZ-AigulNeural",        False, 49, "cyrillic"),
+    LanguageSpec("km", "ខ្មែរ",              "km-KH-SreymomNeural",      False, 50, "khmer"),
+    LanguageSpec("kn", "ಕನ್ನಡ",              "kn-IN-SapnaNeural",        False, 51, "kannada"),
+    LanguageSpec("lo", "ລາວ",               "lo-LA-KeomanyNeural",      False, 52, "lao"),
+    LanguageSpec("lt", "Lietuvių",         "lt-LT-OnaNeural",          False, 53, "latin"),
+    LanguageSpec("lv", "Latviešu",         "lv-LV-EveritaNeural",      False, 54, "latin"),
+    LanguageSpec("mk", "Македонски",       "mk-MK-MarijaNeural",       False, 55, "cyrillic"),
+    LanguageSpec("ml", "മലയാളം",           "ml-IN-SobhanaNeural",      False, 56, "malayalam"),
+    LanguageSpec("mn", "Монгол",           "mn-MN-YesuiNeural",        False, 57, "cyrillic"),
+    LanguageSpec("ms", "Bahasa Melayu",    "ms-MY-YasminNeural",       False, 58, "latin"),
+    LanguageSpec("mt", "Malti",            "mt-MT-GraceNeural",        False, 59, "latin"),
+    LanguageSpec("my", "မြန်မာ",             "my-MM-NilarNeural",        False, 60, "burmese"),
+    LanguageSpec("nb", "Norsk Bokmål",     "nb-NO-PernilleNeural",     False, 61, "latin"),
+    LanguageSpec("ne", "नेपाली",             "ne-NP-HemkalaNeural",      False, 62, "devanagari"),
+    LanguageSpec("ps", "پښتو",              "ps-AF-LatifaNeural",       False, 63, "arabic"),
+    LanguageSpec("si", "සිංහල",              "si-LK-ThiliniNeural",      False, 64, "sinhala"),
+    LanguageSpec("sk", "Slovenčina",       "sk-SK-ViktoriaNeural",     False, 65, "latin"),
+    LanguageSpec("sl", "Slovenščina",      "sl-SI-PetraNeural",        False, 66, "latin"),
+    LanguageSpec("so", "Soomaali",         "so-SO-UbaxNeural",         False, 67, "latin"),
+    LanguageSpec("sq", "Shqip",            "sq-AL-AnilaNeural",        False, 68, "latin"),
+    LanguageSpec("sr", "Српски",           "sr-RS-SophieNeural",       False, 69, "cyrillic"),
+    LanguageSpec("su", "Basa Sunda",       "su-ID-TutiNeural",         False, 70, "latin"),
+    LanguageSpec("sw", "Kiswahili",        "sw-KE-ZuriNeural",         False, 71, "latin"),
+    LanguageSpec("uz", "Oʻzbek",           "uz-UZ-MadinaNeural",       False, 72, "latin"),
+    LanguageSpec("zu", "isiZulu",          "zu-ZA-ThandoNeural",       False, 73, "latin"),
 ]
 
 

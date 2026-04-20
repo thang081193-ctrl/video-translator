@@ -91,8 +91,15 @@ class TestSpecValidity:
 
     @pytest.mark.parametrize("spec", LANGUAGES, ids=[s.code for s in LANGUAGES])
     def test_script_family_valid(self, spec: LanguageSpec):
-        valid = {"latin", "cjk", "arabic", "devanagari", "cyrillic",
-                 "bengali", "telugu", "tamil", "greek", "thai"}
+        valid = {
+            # Core scripts (top 30 baseline)
+            "latin", "cjk", "arabic", "devanagari", "cyrillic",
+            "bengali", "telugu", "tamil", "greek", "thai",
+            # Phase 7 expansion scripts (top 30 → 73)
+            "hebrew", "gujarati", "kannada", "malayalam",
+            "georgian", "khmer", "burmese", "sinhala",
+            "lao", "ethiopic",
+        }
         assert spec.script_family in valid, \
             f"{spec.code}: script_family '{spec.script_family}' not in {valid}"
 
