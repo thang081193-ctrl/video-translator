@@ -147,7 +147,7 @@ def transcribe(
     model = _get_model(model_name)
 
     transcribe_kwargs = {
-        "beam_size": cfg.transcribe.beam_size,
+        "beam_size": cfg.transcribe.effective_beam_size(model_name),
         "vad_filter": cfg.transcribe.vad_filter,
     }
     if source_lang:

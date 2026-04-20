@@ -48,9 +48,20 @@ class TranscribeConfig:
     """Whisper STT settings."""
     default_model: str = "medium"
     beam_size: int = 5
+    # Lower-capacity models (tiny/base) benefit from a smaller beam with
+    # minimal quality loss (~30% faster transcription). Applied per-job via
+    # `effective_beam_size(model_name)`; not an env override.
+    beam_size_small: int = 1
+    small_models: tuple = ("tiny", "base")
     vad_filter: bool = True
     gpu_compute_type: str = "float16"
     cpu_compute_type: str = "int8"
+
+    def effective_beam_size(self, model_name: str) -> int:
+        """Return beam size appropriate for the given Whisper model."""
+        if model_name in self.small_models:
+            return self.beam_size_small
+        return self.beam_size
 
 
 @dataclass(frozen=True)
