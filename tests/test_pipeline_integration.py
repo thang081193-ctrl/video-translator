@@ -298,6 +298,11 @@ class TestMultiTarget:
             assert call.kwargs.get("pre_separated_no_vocals_path") == no_vocals_path
         # Result has dubbed video for each lang
         assert set(result.dubbed_videos.keys()) == {"vi", "en", "ja", "es", "ko"}
+        # Every per-lang file dict carries a `lang` field — needed by the
+        # /api/download-batch endpoint to filter files for bulk downloads.
+        for f in result.files:
+            assert "lang" in f, f"file dict missing 'lang' key: {f}"
+            assert f["lang"] in {"vi", "en", "ja", "es", "ko"}
 
 
 class TestCleanup:

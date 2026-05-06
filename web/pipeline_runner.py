@@ -349,7 +349,7 @@ def _process_one_lang(
         result.srt_paths[target_lang] = srt_path
         result.files.append({
             "name": os.path.basename(srt_path), "type": "srt",
-            "label": f"Subtitles ({target_lang})",
+            "label": f"Subtitles ({target_lang})", "lang": target_lang,
         })
 
     # Step: Dub + Merge (optional)
@@ -379,7 +379,7 @@ def _process_one_lang(
         result.dubbed_videos[target_lang] = output_video
         result.files.append({
             "name": os.path.basename(output_video), "type": "video",
-            "label": f"Dubbed video ({target_lang})",
+            "label": f"Dubbed video ({target_lang})", "lang": target_lang,
         })
         base_video = output_video
 
@@ -407,7 +407,7 @@ def _process_one_lang(
         result.burned_videos[target_lang] = final_video
         result.files.append({
             "name": os.path.basename(final_video), "type": "video",
-            "label": f"{label} ({target_lang})",
+            "label": f"{label} ({target_lang})", "lang": target_lang,
         })
     else:
         progress(f"Finalizing {lang_tag}", lang_pct + pct_per_lang - 1)

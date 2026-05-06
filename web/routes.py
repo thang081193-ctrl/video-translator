@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 import uuid
+import zipfile
 
 from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 
 from pipeline.config import cfg
 from pipeline.languages import DEFAULT_VOICES, ALL_LANGUAGE_CODES, list_for_ui
@@ -248,3 +251,78 @@ async def download_file(job_id: str, filename: str):
         return JSONResponse({"error": "File not found"}, status_code=404)
 
     return FileResponse(file_path, filename=filename)
+
+
+@router.get("/download-batch")
+async def download_batch(job_ids: str, lang: str):
+    """Bundle all result files for one target lang across multiple jobs into a ZIP.
+
+    Used by the per-lang "Download all" buttons in the batch results view.
+    Filters to files tagged with `lang == ?lang` (set in pipeline_runner._process_one_lang).
+    Files without a `lang` field (e.g. fallback "Original video" entries) are skipped.
+
+    On filename collisions across jobs (same source video uploaded twice), the
+    second occurrence is prefixed with the job_id so both end up in the ZIP.
+    """
+    job_id_list = [j.strip() for j in job_ids.split(",") if j.strip()]
+    if not job_id_list:
+        return JSONResponse({"error": "job_ids is required (comma-separated)"}, status_code=400)
+    if lang not in ALL_LANGUAGE_CODES:
+        return JSONResponse(
+            {"error": f"Unsupported lang '{lang}'. Must be one of: {sorted(ALL_LANGUAGE_CODES)}"},
+            status_code=400,
+        )
+
+    upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
+
+    # Collect matching files across all completed jobs
+    files_to_zip: list[tuple[str, str, str]] = []
+    for job_id in job_id_list:
+        job = get_job(job_id)
+        if not job or job.get("status") != "done":
+            continue
+        for f in job.get("files", []):
+            if f.get("lang") != lang:
+                continue
+            file_path = os.path.join(upload_dir, job_id, f["name"])
+            if os.path.isfile(file_path):
+                files_to_zip.append((job_id, f["name"], file_path))
+
+    if not files_to_zip:
+        return JSONResponse(
+            {"error": f"No completed files found for lang={lang} in given jobs"},
+            status_code=404,
+        )
+
+    # Write ZIP to a temp file (spooled would buffer in memory for big batches).
+    # ZIP_STORED — videos are already compressed, deflate just burns CPU.
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as zf:
+            seen: set[str] = set()
+            for job_id, name, path in files_to_zip:
+                arc = name if name not in seen else f"{job_id}_{name}"
+                seen.add(arc)
+                zf.write(path, arcname=arc)
+        tmp.close()
+    except Exception:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+
+    log.info(f"download-batch lang={lang}: bundled {len(files_to_zip)} files from {len(job_id_list)} jobs")
+    return FileResponse(
+        tmp.name,
+        media_type="application/zip",
+        filename=f"batch-{lang}.zip",
+        background=BackgroundTask(_unlink_quiet, tmp.name),
+    )
+
+
+def _unlink_quiet(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
