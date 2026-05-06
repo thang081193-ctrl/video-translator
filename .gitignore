@@ -1,4 +1,5 @@
 .env
+_quota_state.json
 __pycache__/
 *.pyc
 *.wav
