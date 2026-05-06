@@ -43,6 +43,33 @@ async def health_check():
     return {"status": "ok"}
 
 
+@router.get("/quota")
+async def quota_status():
+    """Free-tier quota usage per Gemini key + reset time.
+
+    Used by the UI banner to show $0-mode usage progress. Aggregates per-key
+    counts so a single tier limit (1000 RPD) can be displayed against `n_keys`
+    projects worth of capacity.
+    """
+    from pipeline import quota
+    s = quota.get_usage_summary()
+    counts = s["counts"]
+    used_total = sum(counts.values())
+    n_keys = max(len(counts), 1)
+    capacity_total = s["limit_per_key"] * n_keys
+    return {
+        "used_total": used_total,
+        "capacity_total": capacity_total,
+        "limit_per_key": s["limit_per_key"],
+        "n_keys_seen": len(counts),
+        "per_key": counts,
+        "reset_at_local": s["reset_at_local"],
+        "reset_at_utc": s["reset_at_utc"],
+        "hours_until_reset": s["hours_until_reset"],
+        "date": s["date"],
+    }
+
+
 @router.get("/gpu")
 async def gpu_stats():
     """GPU statistics endpoint (P6.C).

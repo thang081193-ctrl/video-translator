@@ -77,6 +77,33 @@ body {
 
 .topbar h1 span { color: var(--grey-500); font-weight: 300; font-size: 14px; margin-left: 8px; }
 
+/* ─── Quota pill (free-tier usage indicator) ───────────────────── */
+.quota-pill {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-family: 'Google Sans', sans-serif;
+  background: var(--grey-100);
+  color: var(--grey-700);
+  border: 1px solid var(--grey-200);
+  cursor: help;
+  transition: all var(--transition);
+}
+.quota-pill .material-icons-outlined { font-size: 16px; }
+.quota-pill.ok       { background: #e6f4ea; color: #137333; border-color: #ceead6; }
+.quota-pill.warn     { background: #fef7e0; color: #b06000; border-color: #fde293; }
+.quota-pill.critical { background: #fce8e6; color: #c5221f; border-color: #f4c7c3; }
+.quota-pill.hidden   { display: none; }
+.quota-bar {
+  width: 60px; height: 4px;
+  background: rgba(0,0,0,0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.quota-bar-fill { height: 100%; background: currentColor; transition: width var(--transition); }
+
 /* ─── Container ──────────────────────────────────────────────────── */
 .container {
   max-width: 840px;
@@ -559,7 +586,12 @@ body {
   <div class="topbar-icon">
     <span class="material-icons-outlined">translate</span>
   </div>
-  <h1>Video Translator <span>Whisper + Grok AI</span></h1>
+  <h1>Video Translator <span>Whisper + Gemini AI</span></h1>
+  <div class="quota-pill hidden" id="quotaPill" title="">
+    <span class="material-icons-outlined">bolt</span>
+    <span id="quotaText">—</span>
+    <div class="quota-bar"><div class="quota-bar-fill" id="quotaBarFill" style="width:0%"></div></div>
+  </div>
 </header>
 
 <!-- ─── Main Content ─────────────────────────────────────────────── -->
@@ -826,6 +858,37 @@ let batchJobs = [];  // [{file, jobId, status, files}]
 let pollTimer = null;
 let batchStartTime = null;
 const MAX_FILES = 30;
+
+// ─── Quota pill (free-tier usage) ─────────────────────────────────
+async function updateQuota() {
+  try {
+    const r = await fetch('/api/quota');
+    const q = await r.json();
+    const pill = document.getElementById('quotaPill');
+    const txt = document.getElementById('quotaText');
+    const bar = document.getElementById('quotaBarFill');
+    if (!q.n_keys_seen) {
+      pill.classList.add('hidden');
+      return;
+    }
+    const pct = Math.min(100, (q.used_total / q.capacity_total) * 100);
+    pill.classList.remove('hidden', 'ok', 'warn', 'critical');
+    if (pct >= 95) pill.classList.add('critical');
+    else if (pct >= 80) pill.classList.add('warn');
+    else pill.classList.add('ok');
+    txt.textContent = `${q.used_total} / ${q.capacity_total} req · free`;
+    bar.style.width = pct + '%';
+    const perKey = Object.entries(q.per_key)
+      .map(([k, v]) => `${k}: ${v}/${q.limit_per_key}`).join('\n');
+    pill.title =
+      `Gemini free-tier usage today (${q.date})\n` +
+      `Total: ${q.used_total}/${q.capacity_total} (${pct.toFixed(1)}%)\n` +
+      `Per key:\n${perKey}\n` +
+      `Reset: ${q.reset_at_local} (in ~${q.hours_until_reset}h)`;
+  } catch (e) { /* silent */ }
+}
+updateQuota();
+setInterval(updateQuota, 30000);
 
 // ─── Load languages ───────────────────────────────────────────────
 let _allLanguages = [];

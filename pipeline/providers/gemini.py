@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from google import genai
 
+from pipeline import quota
 from pipeline.config import cfg
 from pipeline.logger import get_logger
 from pipeline.providers.base import TranslationProvider
@@ -28,8 +29,15 @@ class GeminiProvider(TranslationProvider):
 
     def generate(self, prompt: str) -> str:
         """Call Gemini API and return text response."""
-        response = self.client.models.generate_content(
-            model=cfg.translate.gemini_model,
-            contents=prompt,
-        )
+        try:
+            response = self.client.models.generate_content(
+                model=cfg.translate.gemini_model,
+                contents=prompt,
+            )
+        except Exception as e:
+            err = str(e)
+            if "RESOURCE_EXHAUSTED" in err or "429" in err:
+                quota.record_quota_exceeded(self.api_key, err)
+            raise
+        quota.record_request(self.api_key)
         return response.text
