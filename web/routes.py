@@ -73,6 +73,19 @@ async def quota_status():
     }
 
 
+@router.get("/alerts")
+async def get_alerts():
+    """Recent suspicious-activity alerts: rate spikes + quota threshold crossings.
+
+    Polled by the UI banner every ~30s. Alerts live in-memory only, so a
+    server restart clears them — that's deliberate (anything older than the
+    current process isn't actionable for the running instance).
+    """
+    from pipeline import quota
+    alerts = quota.get_recent_alerts()
+    return {"alerts": alerts, "count": len(alerts)}
+
+
 @router.get("/gpu")
 async def gpu_stats():
     """GPU statistics endpoint (P6.C).

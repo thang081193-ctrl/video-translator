@@ -104,6 +104,34 @@ body {
 }
 .quota-bar-fill { height: 100%; background: currentColor; transition: width var(--transition); }
 
+/* ─── Suspicious-activity alert banner ───────────────────────────── */
+.alert-banner {
+  display: none;
+  background: var(--red-50);
+  border-bottom: 2px solid var(--red-600);
+  padding: 12px 24px;
+  font-size: 14px;
+  color: var(--red-600);
+}
+.alert-banner.visible { display: block; }
+.alert-banner .alert-row {
+  max-width: 840px; margin: 0 auto;
+  display: flex; align-items: center; gap: 12px;
+}
+.alert-banner .alert-icon { font-size: 20px; flex-shrink: 0; }
+.alert-banner .alert-content { flex: 1; }
+.alert-banner .alert-title { font-weight: 600; margin-bottom: 2px; }
+.alert-banner .alert-message { font-size: 13px; color: var(--grey-900); }
+.alert-banner .alert-time { font-size: 12px; color: var(--grey-700); margin-left: 8px; }
+.alert-banner .alert-dismiss {
+  cursor: pointer; padding: 4px 10px;
+  background: transparent; border: 1px solid currentColor;
+  border-radius: 100px; color: var(--red-600);
+  font-size: 12px; font-weight: 500;
+  transition: background var(--transition);
+}
+.alert-banner .alert-dismiss:hover { background: rgba(217,48,37,0.08); }
+
 /* ─── Container ──────────────────────────────────────────────────── */
 .container {
   max-width: 840px;
@@ -645,6 +673,19 @@ body {
 </head>
 <body>
 
+<!-- ─── Suspicious-activity alert banner (above topbar) ──────────── -->
+<div class="alert-banner" id="alertBanner">
+  <div class="alert-row">
+    <span class="material-icons-outlined alert-icon">warning</span>
+    <div class="alert-content">
+      <div class="alert-title" id="alertTitle">Suspicious activity detected</div>
+      <div class="alert-message" id="alertMessage"></div>
+    </div>
+    <span class="alert-time" id="alertTime"></span>
+    <button class="alert-dismiss" id="alertDismiss">Dismiss</button>
+  </div>
+</div>
+
 <!-- ─── Top Bar ──────────────────────────────────────────────────── -->
 <header class="topbar">
   <div class="topbar-icon">
@@ -957,6 +998,42 @@ async function updateQuota() {
 }
 updateQuota();
 setInterval(updateQuota, 30000);
+
+// ─── Alerts (suspicious activity) ────────────────────────────────
+// Poll /api/alerts; when a new alert appears that the user hasn't dismissed,
+// show the banner. Dismissal stores the alert timestamp in localStorage so
+// the same one doesn't re-pop after a refresh.
+const _dismissedKey = 'vt_dismissed_alert_ts';
+async function updateAlerts() {
+  try {
+    const r = await fetch('/api/alerts');
+    const data = await r.json();
+    const banner = document.getElementById('alertBanner');
+    const dismissedTs = parseFloat(localStorage.getItem(_dismissedKey) || '0');
+    // Newest first; pick the first alert NOT yet dismissed.
+    const fresh = (data.alerts || []).find(a => a.timestamp > dismissedTs);
+    if (!fresh) {
+      banner.classList.remove('visible');
+      return;
+    }
+    document.getElementById('alertTitle').textContent =
+      fresh.type === 'spike' ? 'Suspicious rate spike'
+      : fresh.type === 'quota_exhausted' ? 'Free-tier quota exhausted'
+      : fresh.type === 'quota_critical' ? 'Quota nearly exhausted'
+      : 'Quota warning';
+    document.getElementById('alertMessage').textContent = fresh.message;
+    document.getElementById('alertTime').textContent = fresh.iso_time;
+    banner.dataset.ts = fresh.timestamp;
+    banner.classList.add('visible');
+  } catch (e) { /* silent */ }
+}
+document.getElementById('alertDismiss').addEventListener('click', () => {
+  const banner = document.getElementById('alertBanner');
+  if (banner.dataset.ts) localStorage.setItem(_dismissedKey, banner.dataset.ts);
+  banner.classList.remove('visible');
+});
+updateAlerts();
+setInterval(updateAlerts, 30000);
 
 // ─── Load languages ───────────────────────────────────────────────
 let _allLanguages = [];
