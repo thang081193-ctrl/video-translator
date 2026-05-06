@@ -92,7 +92,8 @@ async def gpu_stats():
 @router.post("/translate")
 async def start_translation(
     video: UploadFile = File(...),
-    target_lang: str = Form(...),
+    target_langs: str = Form(default=""),
+    target_lang: str = Form(default=""),  # legacy single-lang field — deprecated
     source_lang: str = Form(default=""),
     whisper_model: str = Form(default="medium"),
     burn: str = Form(default="false"),
@@ -105,11 +106,28 @@ async def start_translation(
     translate_ocr: str = Form(default="false"),
     ocr_quality: str = Form(default="fast"),
 ):
-    """Upload video and start a translation job."""
-    # ─── Early validation: fail before any expensive work ────────────────────
-    if target_lang not in ALL_LANGUAGE_CODES:
+    """Upload video and start a translation job.
+
+    `target_langs` is a comma-separated list of target codes (e.g. "vi,en,ja").
+    Legacy `target_lang` (single code) is also accepted for back-compat with
+    older clients but maps to a 1-element list.
+    """
+    # Resolve langs from new field, falling back to legacy single field
+    raw_langs = target_langs.strip() or target_lang.strip()
+    parsed_langs = [c.strip() for c in raw_langs.split(",") if c.strip()]
+    if not parsed_langs:
         return JSONResponse(
-            {"error": f"Unsupported target_lang '{target_lang}'. "
+            {"error": "target_langs is required (comma-separated language codes)"},
+            status_code=400,
+        )
+    # De-duplicate while preserving order
+    seen: set[str] = set()
+    parsed_langs = [c for c in parsed_langs if not (c in seen or seen.add(c))]
+
+    invalid = [c for c in parsed_langs if c not in ALL_LANGUAGE_CODES]
+    if invalid:
+        return JSONResponse(
+            {"error": f"Unsupported target_langs {invalid}. "
                       f"Must be one of: {sorted(ALL_LANGUAGE_CODES)}"},
             status_code=400,
         )
@@ -159,7 +177,7 @@ async def start_translation(
 
     params = PipelineParams(
         video_path=video_path,
-        target_lang=target_lang,
+        target_langs=parsed_langs,
         source_lang=source_lang or None,
         whisper_model=whisper_model,
         burn=burn,
@@ -174,7 +192,7 @@ async def start_translation(
         output_dir=job_dir,
     )
 
-    log.info(f"Job {job_id}: video={video_filename}, lang={target_lang}, "
+    log.info(f"Job {job_id}: video={video_filename}, langs={parsed_langs}, "
              f"burn={burn}, dub={dub}, ocr={translate_ocr}, model={whisper_model}, "
              f"audio_mode={audio_mode}")
     create_job(job_id, params, video_filename)

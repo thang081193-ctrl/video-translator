@@ -19,7 +19,7 @@ from web.pipeline_runner import PipelineParams, _vram_guard_check
 def _params(dub=True, audio_mode="keep_original_bgm") -> PipelineParams:
     return PipelineParams(
         video_path="fake.mp4",
-        target_lang="vi",
+        target_langs=["vi"],
         dub=dub,
         audio_mode=audio_mode,
         bgm_path=None,

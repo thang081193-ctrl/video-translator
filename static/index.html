@@ -240,6 +240,49 @@ body {
   padding: 6px 10px !important;
 }
 
+/* ─── Multi-select target lang chips ─────────────────────────────── */
+.lang-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  min-height: 36px; padding: 6px;
+  border: 1px solid var(--grey-300);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  margin-bottom: 4px;
+}
+.lang-chips:empty::before {
+  content: 'No languages selected — pick from list below';
+  color: var(--grey-500); font-size: 13px; padding: 4px;
+}
+.lang-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 6px 4px 10px;
+  background: var(--blue-50); color: var(--blue-600);
+  border-radius: 14px; font-size: 13px; font-weight: 500;
+}
+.lang-chip-remove {
+  cursor: pointer; padding: 0 4px;
+  color: var(--blue-600); opacity: 0.7;
+  transition: opacity var(--transition);
+}
+.lang-chip-remove:hover { opacity: 1; }
+.lang-multi-list {
+  max-height: 180px; overflow-y: auto;
+  border: 1px solid var(--grey-300);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  font-size: 14px;
+}
+.lang-multi-item {
+  padding: 6px 12px; cursor: pointer;
+  border-bottom: 1px solid var(--grey-100);
+  transition: background var(--transition);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.lang-multi-item:last-child { border-bottom: 0; }
+.lang-multi-item:hover { background: var(--grey-50); }
+.lang-multi-item.selected { background: var(--blue-50); color: var(--blue-600); font-weight: 500; }
+.lang-multi-item.selected::after { content: '✓'; color: var(--blue-600); }
+
 /* ─── Toggle Switches ────────────────────────────────────────────── */
 .toggle-row {
   display: flex;
@@ -636,9 +679,10 @@ body {
         </select>
       </div>
       <div class="form-group">
-        <label>Target language</label>
-        <input type="text" id="targetLangFilter" placeholder="Search..." class="lang-filter" autocomplete="off">
-        <select id="targetLang" required></select>
+        <label>Target languages <span style="font-weight:400;color:var(--grey-500);font-size:12px;">(pick one or more)</span></label>
+        <div class="lang-chips" id="targetLangChips"></div>
+        <input type="text" id="targetLangFilter" placeholder="Search to add..." class="lang-filter" autocomplete="off">
+        <div class="lang-multi-list" id="targetLangList"></div>
       </div>
       <div class="form-group">
         <label>Whisper model</label>
@@ -811,7 +855,10 @@ const fileList = $('fileList');
 const fileListItems = $('fileListItems');
 const addMoreBtn = $('addMoreBtn');
 const sourceLang = $('sourceLang');
-const targetLang = $('targetLang');
+const targetLangChips = $('targetLangChips');
+const targetLangList = $('targetLangList');
+const targetLangFilter = $('targetLangFilter');
+const selectedTargetLangs = new Set();  // Set<langCode>, order preserved by render
 const whisperModel = $('whisperModel');
 const batchSize = $('batchSize');
 const burnCheck = $('burnCheck');
@@ -894,11 +941,11 @@ setInterval(updateQuota, 30000);
 let _allLanguages = [];
 fetch('/api/languages').then(r => r.json()).then(data => {
   _allLanguages = data.languages;
-  data.languages.forEach(lang => {
-    sourceLang.add(new Option(lang.name, lang.code));
-    targetLang.add(new Option(lang.name, lang.code));
-  });
-  targetLang.value = 'vi';
+  data.languages.forEach(lang => sourceLang.add(new Option(lang.name, lang.code)));
+  // Default-select "vi" so single-target users keep their old workflow
+  selectedTargetLangs.add('vi');
+  renderTargetChips();
+  renderTargetList('');
   // Hide search filters unless the list is large enough to need them.
   document.querySelectorAll('.lang-filter').forEach(el => {
     el.style.display = data.languages.length > 20 ? '' : 'none';
@@ -920,8 +967,48 @@ function _filterLangSelect(filterInput, selectEl, includeAuto) {
 }
 $('sourceLangFilter').addEventListener('input',
   () => _filterLangSelect($('sourceLangFilter'), sourceLang, true));
-$('targetLangFilter').addEventListener('input',
-  () => _filterLangSelect($('targetLangFilter'), targetLang, false));
+
+// ─── Multi-select target lang: chips + searchable list ────────────
+function renderTargetChips() {
+  targetLangChips.innerHTML = '';
+  for (const code of selectedTargetLangs) {
+    const lang = _allLanguages.find(l => l.code === code);
+    if (!lang) continue;
+    const chip = document.createElement('span');
+    chip.className = 'lang-chip';
+    chip.innerHTML = `${lang.name} <span class="lang-chip-remove" data-code="${code}">×</span>`;
+    targetLangChips.appendChild(chip);
+  }
+  updateSubmitState();
+}
+function renderTargetList(query) {
+  const q = _normLang(query.trim());
+  targetLangList.innerHTML = '';
+  for (const lang of _allLanguages) {
+    if (q && !_normLang(lang.name).includes(q) && !lang.code.includes(q)) continue;
+    const item = document.createElement('div');
+    item.className = 'lang-multi-item' + (selectedTargetLangs.has(lang.code) ? ' selected' : '');
+    item.dataset.code = lang.code;
+    item.textContent = `${lang.name} (${lang.code})`;
+    targetLangList.appendChild(item);
+  }
+}
+targetLangFilter.addEventListener('input', () => renderTargetList(targetLangFilter.value));
+targetLangList.addEventListener('click', e => {
+  const item = e.target.closest('.lang-multi-item');
+  if (!item) return;
+  const code = item.dataset.code;
+  if (selectedTargetLangs.has(code)) selectedTargetLangs.delete(code);
+  else selectedTargetLangs.add(code);
+  renderTargetChips();
+  renderTargetList(targetLangFilter.value);
+});
+targetLangChips.addEventListener('click', e => {
+  if (!e.target.classList.contains('lang-chip-remove')) return;
+  selectedTargetLangs.delete(e.target.dataset.code);
+  renderTargetChips();
+  renderTargetList(targetLangFilter.value);
+});
 
 // ─── File upload (multi) ─────────────────────────────────────────
 uploadArea.addEventListener('click', () => videoInput.click());
@@ -1035,13 +1122,12 @@ function getAudioMode() {
 }
 
 function updateSubmitState() {
-  if (!selectedVideos.length || !targetLang.value) { submitBtn.disabled = true; return; }
+  if (!selectedVideos.length || !selectedTargetLangs.size) { submitBtn.disabled = true; return; }
   if (dubCheck.checked && getAudioMode() === 'custom_bgm' && !selectedBgm) {
     submitBtn.disabled = true; return;
   }
   submitBtn.disabled = false;
 }
-targetLang.addEventListener('change', updateSubmitState);
 
 // ─── Submit (batch) ──────────────────────────────────────────────
 submitBtn.addEventListener('click', async () => {
@@ -1060,7 +1146,7 @@ submitBtn.addEventListener('click', async () => {
     try {
       const formData = new FormData();
       formData.append('video', bj.file);
-      formData.append('target_lang', targetLang.value);
+      formData.append('target_langs', Array.from(selectedTargetLangs).join(','));
       formData.append('source_lang', sourceLang.value);
       formData.append('whisper_model', whisperModel.value);
       formData.append('batch_size', batchSize.value);
