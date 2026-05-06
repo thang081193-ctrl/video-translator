@@ -10,7 +10,7 @@ Covers:
 import pytest
 
 from pipeline.providers.factory import load_keys
-from pipeline.translate import _parse_json_array, _build_prompt
+from pipeline.translate import _parse_json_array, _build_prompt, _build_system_instruction
 from pipeline.dub.tts import get_voice_for_lang
 from pipeline.errors import TransientError, FatalError, DegradedError
 
@@ -143,6 +143,28 @@ class TestBuildPrompt:
         prompt = _build_prompt(["text"], "en", "vi")
         assert "previous segments" not in prompt.lower()
         assert "following segments" not in prompt.lower()
+
+
+class TestBuildSystemInstruction:
+    """The translator role/rules block, routed to provider system slot."""
+
+    def test_includes_lang_pair(self):
+        s = _build_system_instruction("en", "vi")
+        assert "en" in s and "vi" in s
+
+    def test_includes_no_paraphrase_rule(self):
+        """Faithful-translation directive must be in system instruction —
+        moving it out of the user prompt is the whole point of the split."""
+        s = _build_system_instruction("en", "vi")
+        assert "paraphrase" in s.lower()
+
+    def test_includes_brand_preservation(self):
+        s = _build_system_instruction("en", "vi")
+        assert "brand" in s.lower() or "proper noun" in s.lower()
+
+    def test_includes_json_directive(self):
+        s = _build_system_instruction("en", "vi")
+        assert "JSON" in s
 
 
 # ─── Voice Lookup ────────────────────────────────────────────────────────────

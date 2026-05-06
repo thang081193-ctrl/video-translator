@@ -30,7 +30,8 @@ class TestConfigDefaults:
         assert c.translate.grok_model == "grok-3-mini-fast"
         assert c.translate.grok_temperature == 0.3
         assert c.translate.grok_timeout == 120
-        assert c.translate.gemini_model == "gemini-2.0-flash"
+        assert c.translate.gemini_model == "gemini-2.5-flash-lite"
+        assert c.translate.gemini_temperature == 0.3
         assert c.translate.attempts_single_key == 6
         assert c.translate.attempts_multi_key == 3
 

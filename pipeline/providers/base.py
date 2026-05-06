@@ -19,8 +19,15 @@ class TranslationProvider(ABC):
     name: str = "base"
 
     @abstractmethod
-    def generate(self, prompt: str) -> str:
-        """Send prompt to API, return raw text response."""
+    def generate(self, prompt: str, system_instruction: str | None = None) -> str:
+        """Send prompt to API, return raw text response.
+
+        `system_instruction` is the model's role/rules (e.g. "be a faithful
+        subtitle translator, output JSON only"). Providers route it to their
+        native system slot — Gemini's GenerateContentConfig.system_instruction,
+        Grok's messages[role=system] — so the model treats it as higher-priority
+        than user content. None means use the provider's built-in default.
+        """
         ...
 
     @staticmethod
@@ -80,9 +87,9 @@ class KeyRotator:
         labels = {"grok": "Grok", "vertex": "Vertex AI", "gemini": "Gemini"}
         return labels.get(self.current_key["provider"], self.current_key["provider"])
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, system_instruction: str | None = None) -> str:
         """Call current provider's generate method."""
-        return self.current_provider.generate(prompt)
+        return self.current_provider.generate(prompt, system_instruction)
 
     def rotate(self) -> bool:
         """Switch to next key. Returns True if we haven't looped back to start."""

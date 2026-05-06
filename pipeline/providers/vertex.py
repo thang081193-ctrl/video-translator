@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from google import genai
+from google.genai import types
 
 from pipeline.config import cfg
 from pipeline.logger import get_logger
 from pipeline.providers.base import TranslationProvider
+from pipeline.providers.gemini import _SAFETY_OFF
 
 log = get_logger("Vertex")
 
@@ -26,10 +28,17 @@ class VertexProvider(TranslationProvider):
             self._client = genai.Client(vertexai=True, api_key=self.api_key)
         return self._client
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, system_instruction: str | None = None) -> str:
         """Call Vertex AI API and return text response."""
+        config = types.GenerateContentConfig(
+            temperature=cfg.translate.gemini_temperature,
+            response_mime_type="application/json",
+            system_instruction=system_instruction,
+            safety_settings=_SAFETY_OFF,
+        )
         response = self.client.models.generate_content(
             model=cfg.translate.gemini_model,
             contents=prompt,
+            config=config,
         )
         return response.text

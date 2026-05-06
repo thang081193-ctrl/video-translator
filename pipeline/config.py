@@ -72,6 +72,7 @@ class TranslateConfig:
     grok_temperature: float = 0.3
     grok_timeout: int = 120
     gemini_model: str = "gemini-2.5-flash-lite"
+    gemini_temperature: float = 0.3   # low → faithful translation, no paraphrase
     batch_size: int = 20
     context_window: int = 2           # segments before/after batch for context
     attempts_single_key: int = 6      # retry attempts when only 1 key
@@ -212,6 +213,7 @@ class Config:
                 batch_size=_env_int("TRANSLATE_BATCH_SIZE", 20),
                 grok_model=os.getenv("GROK_MODEL", TranslateConfig.grok_model),
                 gemini_model=os.getenv("GEMINI_MODEL", TranslateConfig.gemini_model),
+                gemini_temperature=_env_float("GEMINI_TEMPERATURE", TranslateConfig.gemini_temperature),
             ),
             tts=TTSConfig(
                 concurrency=_env_int("TTS_CONCURRENCY", 5),

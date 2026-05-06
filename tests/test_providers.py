@@ -41,8 +41,10 @@ class TestKeyRotation:
         name = "mock"
         def __init__(self):
             self.calls = 0
-        def generate(self, prompt: str) -> str:
+            self.last_system: str | None = None
+        def generate(self, prompt: str, system_instruction: str | None = None) -> str:
             self.calls += 1
+            self.last_system = system_instruction
             return '["translated"]'
 
     def _make_rotator(self, n_keys: int):

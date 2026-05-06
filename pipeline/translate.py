@@ -19,16 +19,40 @@ log = get_logger("Translate")
 
 # ─── Prompt building ─────────────────────────────────────────────────────────
 
+def _build_system_instruction(source_lang: str, target_lang: str) -> str:
+    """Rules/role for the translator. Goes into the model's system slot.
+
+    Models weight system instructions higher than user content, so faithful-
+    translation rules belong here rather than buried in the segment prompt.
+    """
+    return (
+        f"You are a professional subtitle translator. Translate from "
+        f"{source_lang} to {target_lang}.\n"
+        "\n"
+        "Rules:\n"
+        "- Translate each segment one-to-one. Output the same number of "
+        "segments as input, in the same order.\n"
+        "- Do not paraphrase, expand, summarize, or shorten — preserve the "
+        "source meaning and tone exactly.\n"
+        "- Preserve brand names, product names, technical acronyms, and proper "
+        "nouns verbatim (do not translate, expand, or transliterate them).\n"
+        "- Keep translations natural and concise — they will be displayed as "
+        "subtitles.\n"
+        "- Output ONLY a JSON array of strings. No prose, no markdown, no "
+        "explanations."
+    )
+
+
 def _build_prompt(texts: list[str], source_lang: str, target_lang: str,
                   context_before: list[str] = None, context_after: list[str] = None) -> str:
-    """Build translation prompt."""
+    """Build the user-content half of the translation request.
+
+    Lang/rules duplicated from the system instruction as belt-and-suspenders —
+    cheaper to carry than to debug a paraphrased segment.
+    """
     prompt_parts = [
         f"Translate the following subtitle segments from {source_lang} to {target_lang}.",
-        "Keep translations natural and concise (suitable for subtitles).",
-        "Maintain the same meaning and tone.",
-        "Preserve brand names, product names, and proper nouns exactly as written (do not translate or expand them).",
         "Return ONLY a JSON array of translated strings, matching the input order.",
-        "Do not include any other text, explanation, or markdown formatting.",
     ]
 
     if context_before:
@@ -132,6 +156,7 @@ def translate_segments(
         context_after = texts[end:end + ctx_window] if end < len(texts) else None
 
         prompt = _build_prompt(batch_texts, source_lang, target_lang, context_before, context_after)
+        system_instruction = _build_system_instruction(source_lang, target_lang)
 
         log.info(f"Translating batch {batch_idx + 1}/{total_batches} "
                  f"({len(batch_texts)} segments) via {rotator.current_provider_label}...")
@@ -145,7 +170,7 @@ def translate_segments(
 
         for attempt in range(max_total_attempts):
             try:
-                response_text = rotator.generate(prompt)
+                response_text = rotator.generate(prompt, system_instruction)
                 translations = _parse_json_array(response_text)
 
                 if translations and len(translations) == len(batch_texts):

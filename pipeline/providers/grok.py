@@ -22,19 +22,18 @@ class GrokProvider(TranslationProvider):
     def __init__(self, api_key: str):
         self.api_key = api_key
 
-    def generate(self, prompt: str) -> str:
+    _DEFAULT_SYSTEM = (
+        "You are a professional subtitle translator. "
+        "Always respond with ONLY a JSON array of translated strings. "
+        "No explanation, no markdown formatting."
+    )
+
+    def generate(self, prompt: str, system_instruction: str | None = None) -> str:
         """Call Grok API and return text response."""
         payload = json.dumps({
             "model": cfg.translate.grok_model,
             "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a professional subtitle translator. "
-                        "Always respond with ONLY a JSON array of translated strings. "
-                        "No explanation, no markdown formatting."
-                    ),
-                },
+                {"role": "system", "content": system_instruction or self._DEFAULT_SYSTEM},
                 {"role": "user", "content": prompt},
             ],
             "temperature": cfg.translate.grok_temperature,
