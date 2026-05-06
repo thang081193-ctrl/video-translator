@@ -26,6 +26,7 @@ def _build_prompt(texts: list[str], source_lang: str, target_lang: str,
         f"Translate the following subtitle segments from {source_lang} to {target_lang}.",
         "Keep translations natural and concise (suitable for subtitles).",
         "Maintain the same meaning and tone.",
+        "Preserve brand names, product names, and proper nouns exactly as written (do not translate or expand them).",
         "Return ONLY a JSON array of translated strings, matching the input order.",
         "Do not include any other text, explanation, or markdown formatting.",
     ]

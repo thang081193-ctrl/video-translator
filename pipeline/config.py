@@ -71,7 +71,7 @@ class TranslateConfig:
     grok_model: str = "grok-3-mini-fast"
     grok_temperature: float = 0.3
     grok_timeout: int = 120
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash-lite"
     batch_size: int = 20
     context_window: int = 2           # segments before/after batch for context
     attempts_single_key: int = 6      # retry attempts when only 1 key
