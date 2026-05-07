@@ -162,10 +162,17 @@ def _print_summary(status: RuntimeStatus):
             f"{len(status.invalid_grok_keys)} key(s)"
         )
 
-    if status.has_grok:
-        log.info("[OK] Grok API key detected.")
-    else:
-        log.warning("[WARN] Grok API key not found (set GROK_API_KEYS or GROK_API_KEY).")
+    # Tier classification — explicit free vs paid posture.
+    # Reuses the same logic as factory.classify_tier() so the message matches
+    # the one emitted at first translate call.
+    from pipeline.providers.factory import classify_tier, _log_tier_banner
+    fake_keys = (
+        [{"provider": "gemini", "key": k} for k in status.gemini_keys]
+        + [{"provider": "grok", "key": k} for k in status.grok_keys]
+        + [{"provider": "vertex", "key": k} for k in status.vertex_keys]
+    )
+    if fake_keys:
+        _log_tier_banner(classify_tier(fake_keys))
 
 
 def run_preflight(

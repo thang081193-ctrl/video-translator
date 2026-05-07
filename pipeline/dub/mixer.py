@@ -187,6 +187,7 @@ def build_dubbed_audio(
     bgm_volume: float = 0.25,
     original_audio_path: str | None = None,
     video_duration: float | None = None,
+    pre_separated_no_vocals_path: str | None = None,
 ) -> str:
     """
     Build complete dubbed audio track:
@@ -200,6 +201,11 @@ def build_dubbed_audio(
 
     Scratch directories (_tts_temp, _demucs_temp) are managed by temp_dir()
     context managers — guaranteed cleanup on both success and exception paths.
+
+    `pre_separated_no_vocals_path` lets the caller share a single Demucs
+    output across multiple lang fan-outs of the same source video — separation
+    is the slowest step in the dub pipeline and only depends on the source
+    audio, not the target language.
     """
     check_ffmpeg()
     voice = get_voice_for_lang(lang, custom_voice)
@@ -208,7 +214,12 @@ def build_dubbed_audio(
         if not bgm_path or not os.path.isfile(bgm_path):
             raise FatalError(f"Background music file not found: {bgm_path}")
     elif audio_mode == "keep_original_bgm":
-        if not original_audio_path or not os.path.isfile(original_audio_path):
+        if pre_separated_no_vocals_path:
+            if not os.path.isfile(pre_separated_no_vocals_path):
+                raise FatalError(
+                    f"Pre-separated no_vocals file missing: {pre_separated_no_vocals_path}"
+                )
+        elif not original_audio_path or not os.path.isfile(original_audio_path):
             raise FatalError("Original audio file required for keep_original_bgm mode")
 
     with temp_dir("tts", base_dir=output_dir) as tts_dir:
@@ -217,13 +228,19 @@ def build_dubbed_audio(
         dubbed_raw = _ffmpeg_concat(concat_pieces, tts_dir)
 
         if audio_mode == "keep_original_bgm":
-            log.info("Separating original audio (Demucs)...")
-            with temp_dir("demucs", base_dir=output_dir) as demucs_dir:
-                stems = separate_audio(original_audio_path, demucs_dir)
+            if pre_separated_no_vocals_path:
                 _mix_voice_and_bgm(
-                    dubbed_raw, stems["no_vocals"], loop_bgm=False,
+                    dubbed_raw, pre_separated_no_vocals_path, loop_bgm=False,
                     audio_mode=audio_mode, bgm_volume=bgm_volume, output_path=output_path,
                 )
+            else:
+                log.info("Separating original audio (Demucs)...")
+                with temp_dir("demucs", base_dir=output_dir) as demucs_dir:
+                    stems = separate_audio(original_audio_path, demucs_dir)
+                    _mix_voice_and_bgm(
+                        dubbed_raw, stems["no_vocals"], loop_bgm=False,
+                        audio_mode=audio_mode, bgm_volume=bgm_volume, output_path=output_path,
+                    )
         else:
             _mix_voice_and_bgm(
                 dubbed_raw, bgm_path, loop_bgm=True,

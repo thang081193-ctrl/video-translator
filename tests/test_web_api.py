@@ -162,10 +162,117 @@ class TestStatusEndpoint:
         assert r.status_code == 404
 
 
+class TestQuotaEndpointTier:
+    """/api/quota includes a tier field that the UI uses for the $0-mode badge."""
+
+    def test_quota_response_has_tier_field(self, client, monkeypatch):
+        # Set up a known free-tier env (Gemini-only)
+        for var in ["GROK_API_KEYS", "GROK_API_KEY", "VERTEX_API_KEYS",
+                    "VERTEX_API_KEY", "GEMINI_API_KEY"]:
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("GEMINI_API_KEYS", "fake-gemini-key-1,fake-gemini-key-2")
+        r = client.get("/api/quota")
+        assert r.status_code == 200
+        body = r.json()
+        assert "tier" in body, "UI badge depends on this field"
+        assert body["tier"]["tier"] == "free"
+        assert body["tier"]["free_count"] == 2
+        assert body["tier"]["paid_count"] == 0
+
+    def test_quota_response_tier_empty_when_no_keys(self, client, monkeypatch):
+        """/api/quota must NOT 500 when .env is broken — UI still polls it."""
+        for var in ["GROK_API_KEYS", "GROK_API_KEY", "GEMINI_API_KEYS",
+                    "GEMINI_API_KEY", "VERTEX_API_KEYS", "VERTEX_API_KEY"]:
+            monkeypatch.delenv(var, raising=False)
+        r = client.get("/api/quota")
+        assert r.status_code == 200
+        assert r.json()["tier"]["tier"] == "empty"
+
+
 class TestDownloadEndpoint:
     def test_missing_job(self, client):
         r = client.get("/api/download/nonexistent/file.srt")
         assert r.status_code == 404
+
+
+class TestDownloadBatchEndpoint:
+    """Per-lang ZIP bundle for "download all by language" buttons."""
+
+    def test_missing_job_ids(self, client):
+        r = client.get("/api/download-batch?lang=vi")
+        # 422 = FastAPI validation, 400 = our custom check; either is fine
+        assert r.status_code in (400, 422)
+
+    def test_empty_job_ids_string(self, client):
+        r = client.get("/api/download-batch?job_ids=&lang=vi")
+        assert r.status_code == 400
+        assert "job_ids" in r.json()["error"].lower()
+
+    def test_invalid_lang(self, client):
+        r = client.get("/api/download-batch?job_ids=abc&lang=zz")
+        assert r.status_code == 400
+        assert "Unsupported lang" in r.json()["error"]
+
+    def test_unknown_jobs_returns_404(self, client):
+        """All requested jobs unknown → no files → 404."""
+        r = client.get("/api/download-batch?job_ids=fakeA,fakeB&lang=vi")
+        assert r.status_code == 404
+        assert "No completed files" in r.json()["error"]
+
+    def test_zip_bundles_files_for_lang(self, client):
+        """Happy path: 2 fake completed jobs each with a vi file → ZIP has both,
+        en file is excluded. Uses real project uploads dir (cleaned up after)."""
+        import os
+        import zipfile
+        import io
+        from web import worker, routes
+
+        # Place fake files at <project>/uploads/<jid>/<file> — that's where the
+        # endpoint resolves them via os.path.dirname(routes.__file__).
+        project_uploads = os.path.join(os.path.dirname(os.path.dirname(routes.__file__)), "uploads")
+        os.makedirs(os.path.join(project_uploads, "test_dlbatch_a"), exist_ok=True)
+        os.makedirs(os.path.join(project_uploads, "test_dlbatch_b"), exist_ok=True)
+        path_a = os.path.join(project_uploads, "test_dlbatch_a", "x.vi.srt")
+        path_b = os.path.join(project_uploads, "test_dlbatch_b", "y.vi.srt")
+        with open(path_a, "w") as f: f.write("AAA")
+        with open(path_b, "w") as f: f.write("BBB")
+
+        try:
+            with worker._jobs_lock:
+                worker.jobs["test_dlbatch_a"] = {
+                    "id": "test_dlbatch_a", "status": "done",
+                    "files": [{"name": "x.vi.srt", "type": "srt",
+                               "label": "Subtitles (vi)", "lang": "vi"}],
+                }
+                worker.jobs["test_dlbatch_b"] = {
+                    "id": "test_dlbatch_b", "status": "done",
+                    "files": [{"name": "y.vi.srt", "type": "srt",
+                               "label": "Subtitles (vi)", "lang": "vi"},
+                              {"name": "y.en.srt", "type": "srt",  # different lang, must be excluded
+                               "label": "Subtitles (en)", "lang": "en"}],
+                }
+
+            r = client.get("/api/download-batch?job_ids=test_dlbatch_a,test_dlbatch_b&lang=vi")
+            assert r.status_code == 200
+            assert r.headers["content-type"] == "application/zip"
+            assert "batch-vi.zip" in r.headers["content-disposition"]
+
+            # Inspect ZIP content
+            zf = zipfile.ZipFile(io.BytesIO(r.content))
+            names = sorted(zf.namelist())
+            assert names == ["x.vi.srt", "y.vi.srt"]  # en file excluded
+            assert zf.read("x.vi.srt") == b"AAA"
+            assert zf.read("y.vi.srt") == b"BBB"
+        finally:
+            with worker._jobs_lock:
+                worker.jobs.pop("test_dlbatch_a", None)
+                worker.jobs.pop("test_dlbatch_b", None)
+            for p in (path_a, path_b):
+                try: os.remove(p)
+                except OSError: pass
+            for d in ("test_dlbatch_a", "test_dlbatch_b"):
+                try: os.rmdir(os.path.join(project_uploads, d))
+                except OSError: pass
 
 
 class TestIndexPage:

@@ -78,6 +78,22 @@ body {
 .topbar h1 span { color: var(--grey-500); font-weight: 300; font-size: 14px; margin-left: 8px; }
 
 /* ─── Quota pill (free-tier usage indicator) ───────────────────── */
+.tier-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px; font-weight: 600;
+  font-family: 'Google Sans', sans-serif;
+  margin-left: 12px;
+  cursor: help;
+}
+.tier-badge.tier-free  { background: #e6f4ea; color: #137333; border: 1px solid #ceead6; }
+.tier-badge.tier-paid  { background: #fce8e6; color: #c5221f; border: 1px solid #f4c7c3; }
+.tier-badge.tier-mixed { background: #fef7e0; color: #b06000; border: 1px solid #fde293; }
+.tier-badge.tier-empty { background: var(--grey-100); color: var(--grey-700); border: 1px solid var(--grey-200); }
+.tier-badge.hidden { display: none; }
+.tier-badge .material-icons-outlined { font-size: 14px; }
+
 .quota-pill {
   margin-left: auto;
   display: flex; align-items: center; gap: 8px;
@@ -103,6 +119,34 @@ body {
   overflow: hidden;
 }
 .quota-bar-fill { height: 100%; background: currentColor; transition: width var(--transition); }
+
+/* ─── Suspicious-activity alert banner ───────────────────────────── */
+.alert-banner {
+  display: none;
+  background: var(--red-50);
+  border-bottom: 2px solid var(--red-600);
+  padding: 12px 24px;
+  font-size: 14px;
+  color: var(--red-600);
+}
+.alert-banner.visible { display: block; }
+.alert-banner .alert-row {
+  max-width: 840px; margin: 0 auto;
+  display: flex; align-items: center; gap: 12px;
+}
+.alert-banner .alert-icon { font-size: 20px; flex-shrink: 0; }
+.alert-banner .alert-content { flex: 1; }
+.alert-banner .alert-title { font-weight: 600; margin-bottom: 2px; }
+.alert-banner .alert-message { font-size: 13px; color: var(--grey-900); }
+.alert-banner .alert-time { font-size: 12px; color: var(--grey-700); margin-left: 8px; }
+.alert-banner .alert-dismiss {
+  cursor: pointer; padding: 4px 10px;
+  background: transparent; border: 1px solid currentColor;
+  border-radius: 100px; color: var(--red-600);
+  font-size: 12px; font-weight: 500;
+  transition: background var(--transition);
+}
+.alert-banner .alert-dismiss:hover { background: rgba(217,48,37,0.08); }
 
 /* ─── Container ──────────────────────────────────────────────────── */
 .container {
@@ -239,6 +283,49 @@ body {
   font-size: 13px !important;
   padding: 6px 10px !important;
 }
+
+/* ─── Multi-select target lang chips ─────────────────────────────── */
+.lang-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  min-height: 36px; padding: 6px;
+  border: 1px solid var(--grey-300);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  margin-bottom: 4px;
+}
+.lang-chips:empty::before {
+  content: 'No languages selected — pick from list below';
+  color: var(--grey-500); font-size: 13px; padding: 4px;
+}
+.lang-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 6px 4px 10px;
+  background: var(--blue-50); color: var(--blue-600);
+  border-radius: 14px; font-size: 13px; font-weight: 500;
+}
+.lang-chip-remove {
+  cursor: pointer; padding: 0 4px;
+  color: var(--blue-600); opacity: 0.7;
+  transition: opacity var(--transition);
+}
+.lang-chip-remove:hover { opacity: 1; }
+.lang-multi-list {
+  max-height: 180px; overflow-y: auto;
+  border: 1px solid var(--grey-300);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  font-size: 14px;
+}
+.lang-multi-item {
+  padding: 6px 12px; cursor: pointer;
+  border-bottom: 1px solid var(--grey-100);
+  transition: background var(--transition);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.lang-multi-item:last-child { border-bottom: 0; }
+.lang-multi-item:hover { background: var(--grey-50); }
+.lang-multi-item.selected { background: var(--blue-50); color: var(--blue-600); font-weight: 500; }
+.lang-multi-item.selected::after { content: '✓'; color: var(--blue-600); }
 
 /* ─── Toggle Switches ────────────────────────────────────────────── */
 .toggle-row {
@@ -472,6 +559,27 @@ body {
 }
 .btn-download:hover { background: var(--blue-50); }
 
+/* ─── Bulk-by-lang download (per-target ZIP) ─────────────────────── */
+.bulk-download-section {
+  background: var(--blue-50);
+  border: 1px solid var(--blue-100);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+.bulk-download-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn-bulk-download {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 13px; font-weight: 500;
+  padding: 8px 16px;
+  background: var(--blue-600); color: var(--white);
+  border-radius: 100px;
+  display: inline-flex; align-items: center; gap: 6px;
+  text-decoration: none;
+  transition: background var(--transition);
+}
+.btn-bulk-download:hover { background: var(--blue-500); }
+
 /* ─── Error ──────────────────────────────────────────────────────── */
 .error-banner {
   display: none;
@@ -581,12 +689,29 @@ body {
 </head>
 <body>
 
+<!-- ─── Suspicious-activity alert banner (above topbar) ──────────── -->
+<div class="alert-banner" id="alertBanner">
+  <div class="alert-row">
+    <span class="material-icons-outlined alert-icon">warning</span>
+    <div class="alert-content">
+      <div class="alert-title" id="alertTitle">Suspicious activity detected</div>
+      <div class="alert-message" id="alertMessage"></div>
+    </div>
+    <span class="alert-time" id="alertTime"></span>
+    <button class="alert-dismiss" id="alertDismiss">Dismiss</button>
+  </div>
+</div>
+
 <!-- ─── Top Bar ──────────────────────────────────────────────────── -->
 <header class="topbar">
   <div class="topbar-icon">
     <span class="material-icons-outlined">translate</span>
   </div>
   <h1>Video Translator <span>Whisper + Gemini AI</span></h1>
+  <div class="tier-badge hidden" id="tierBadge" title="">
+    <span class="material-icons-outlined">verified</span>
+    <span id="tierBadgeText">—</span>
+  </div>
   <div class="quota-pill hidden" id="quotaPill" title="">
     <span class="material-icons-outlined">bolt</span>
     <span id="quotaText">—</span>
@@ -636,9 +761,10 @@ body {
         </select>
       </div>
       <div class="form-group">
-        <label>Target language</label>
-        <input type="text" id="targetLangFilter" placeholder="Search..." class="lang-filter" autocomplete="off">
-        <select id="targetLang" required></select>
+        <label>Target languages <span style="font-weight:400;color:var(--grey-500);font-size:12px;">(pick one or more)</span></label>
+        <div class="lang-chips" id="targetLangChips"></div>
+        <input type="text" id="targetLangFilter" placeholder="Search to add..." class="lang-filter" autocomplete="off">
+        <div class="lang-multi-list" id="targetLangList"></div>
       </div>
       <div class="form-group">
         <label>Whisper model</label>
@@ -811,7 +937,10 @@ const fileList = $('fileList');
 const fileListItems = $('fileListItems');
 const addMoreBtn = $('addMoreBtn');
 const sourceLang = $('sourceLang');
-const targetLang = $('targetLang');
+const targetLangChips = $('targetLangChips');
+const targetLangList = $('targetLangList');
+const targetLangFilter = $('targetLangFilter');
+const selectedTargetLangs = new Set();  // Set<langCode>, order preserved by render
 const whisperModel = $('whisperModel');
 const batchSize = $('batchSize');
 const burnCheck = $('burnCheck');
@@ -859,11 +988,33 @@ let pollTimer = null;
 let batchStartTime = null;
 const MAX_FILES = 30;
 
-// ─── Quota pill (free-tier usage) ─────────────────────────────────
+// ─── Quota pill (free-tier usage) + tier badge ────────────────────
+function _renderTierBadge(tierInfo) {
+  const badge = document.getElementById('tierBadge');
+  const text = document.getElementById('tierBadgeText');
+  if (!tierInfo || tierInfo.tier === 'empty') {
+    badge.classList.add('hidden');
+    return;
+  }
+  badge.classList.remove('hidden', 'tier-free', 'tier-paid', 'tier-mixed', 'tier-empty');
+  badge.classList.add('tier-' + tierInfo.tier);
+  const labels = { free: 'Free tier', paid: 'PAID — billed', mixed: 'MIXED — partial billing' };
+  text.textContent = labels[tierInfo.tier] || tierInfo.tier;
+  const breakdown = Object.entries(tierInfo.by_provider || {})
+    .map(([p, n]) => `${n}× ${p}`).join(', ');
+  badge.title =
+    `Translation pricing tier: ${tierInfo.tier.toUpperCase()}\n` +
+    `Loaded keys: ${breakdown || 'none'}\n` +
+    `Free: ${tierInfo.free_count}, Paid: ${tierInfo.paid_count}\n` +
+    (tierInfo.tier === 'free'
+      ? '$0 mode — no billable provider loaded.'
+      : 'Some/all calls will be billed. Remove paid keys from .env to stay free.');
+}
 async function updateQuota() {
   try {
     const r = await fetch('/api/quota');
     const q = await r.json();
+    _renderTierBadge(q.tier);
     const pill = document.getElementById('quotaPill');
     const txt = document.getElementById('quotaText');
     const bar = document.getElementById('quotaBarFill');
@@ -890,15 +1041,51 @@ async function updateQuota() {
 updateQuota();
 setInterval(updateQuota, 30000);
 
+// ─── Alerts (suspicious activity) ────────────────────────────────
+// Poll /api/alerts; when a new alert appears that the user hasn't dismissed,
+// show the banner. Dismissal stores the alert timestamp in localStorage so
+// the same one doesn't re-pop after a refresh.
+const _dismissedKey = 'vt_dismissed_alert_ts';
+async function updateAlerts() {
+  try {
+    const r = await fetch('/api/alerts');
+    const data = await r.json();
+    const banner = document.getElementById('alertBanner');
+    const dismissedTs = parseFloat(localStorage.getItem(_dismissedKey) || '0');
+    // Newest first; pick the first alert NOT yet dismissed.
+    const fresh = (data.alerts || []).find(a => a.timestamp > dismissedTs);
+    if (!fresh) {
+      banner.classList.remove('visible');
+      return;
+    }
+    document.getElementById('alertTitle').textContent =
+      fresh.type === 'spike' ? 'Suspicious rate spike'
+      : fresh.type === 'quota_exhausted' ? 'Free-tier quota exhausted'
+      : fresh.type === 'quota_critical' ? 'Quota nearly exhausted'
+      : 'Quota warning';
+    document.getElementById('alertMessage').textContent = fresh.message;
+    document.getElementById('alertTime').textContent = fresh.iso_time;
+    banner.dataset.ts = fresh.timestamp;
+    banner.classList.add('visible');
+  } catch (e) { /* silent */ }
+}
+document.getElementById('alertDismiss').addEventListener('click', () => {
+  const banner = document.getElementById('alertBanner');
+  if (banner.dataset.ts) localStorage.setItem(_dismissedKey, banner.dataset.ts);
+  banner.classList.remove('visible');
+});
+updateAlerts();
+setInterval(updateAlerts, 30000);
+
 // ─── Load languages ───────────────────────────────────────────────
 let _allLanguages = [];
 fetch('/api/languages').then(r => r.json()).then(data => {
   _allLanguages = data.languages;
-  data.languages.forEach(lang => {
-    sourceLang.add(new Option(lang.name, lang.code));
-    targetLang.add(new Option(lang.name, lang.code));
-  });
-  targetLang.value = 'vi';
+  data.languages.forEach(lang => sourceLang.add(new Option(lang.name, lang.code)));
+  // Default-select "vi" so single-target users keep their old workflow
+  selectedTargetLangs.add('vi');
+  renderTargetChips();
+  renderTargetList('');
   // Hide search filters unless the list is large enough to need them.
   document.querySelectorAll('.lang-filter').forEach(el => {
     el.style.display = data.languages.length > 20 ? '' : 'none';
@@ -920,8 +1107,48 @@ function _filterLangSelect(filterInput, selectEl, includeAuto) {
 }
 $('sourceLangFilter').addEventListener('input',
   () => _filterLangSelect($('sourceLangFilter'), sourceLang, true));
-$('targetLangFilter').addEventListener('input',
-  () => _filterLangSelect($('targetLangFilter'), targetLang, false));
+
+// ─── Multi-select target lang: chips + searchable list ────────────
+function renderTargetChips() {
+  targetLangChips.innerHTML = '';
+  for (const code of selectedTargetLangs) {
+    const lang = _allLanguages.find(l => l.code === code);
+    if (!lang) continue;
+    const chip = document.createElement('span');
+    chip.className = 'lang-chip';
+    chip.innerHTML = `${lang.name} <span class="lang-chip-remove" data-code="${code}">×</span>`;
+    targetLangChips.appendChild(chip);
+  }
+  updateSubmitState();
+}
+function renderTargetList(query) {
+  const q = _normLang(query.trim());
+  targetLangList.innerHTML = '';
+  for (const lang of _allLanguages) {
+    if (q && !_normLang(lang.name).includes(q) && !lang.code.includes(q)) continue;
+    const item = document.createElement('div');
+    item.className = 'lang-multi-item' + (selectedTargetLangs.has(lang.code) ? ' selected' : '');
+    item.dataset.code = lang.code;
+    item.textContent = `${lang.name} (${lang.code})`;
+    targetLangList.appendChild(item);
+  }
+}
+targetLangFilter.addEventListener('input', () => renderTargetList(targetLangFilter.value));
+targetLangList.addEventListener('click', e => {
+  const item = e.target.closest('.lang-multi-item');
+  if (!item) return;
+  const code = item.dataset.code;
+  if (selectedTargetLangs.has(code)) selectedTargetLangs.delete(code);
+  else selectedTargetLangs.add(code);
+  renderTargetChips();
+  renderTargetList(targetLangFilter.value);
+});
+targetLangChips.addEventListener('click', e => {
+  if (!e.target.classList.contains('lang-chip-remove')) return;
+  selectedTargetLangs.delete(e.target.dataset.code);
+  renderTargetChips();
+  renderTargetList(targetLangFilter.value);
+});
 
 // ─── File upload (multi) ─────────────────────────────────────────
 uploadArea.addEventListener('click', () => videoInput.click());
@@ -1035,13 +1262,12 @@ function getAudioMode() {
 }
 
 function updateSubmitState() {
-  if (!selectedVideos.length || !targetLang.value) { submitBtn.disabled = true; return; }
+  if (!selectedVideos.length || !selectedTargetLangs.size) { submitBtn.disabled = true; return; }
   if (dubCheck.checked && getAudioMode() === 'custom_bgm' && !selectedBgm) {
     submitBtn.disabled = true; return;
   }
   submitBtn.disabled = false;
 }
-targetLang.addEventListener('change', updateSubmitState);
 
 // ─── Submit (batch) ──────────────────────────────────────────────
 submitBtn.addEventListener('click', async () => {
@@ -1060,7 +1286,7 @@ submitBtn.addEventListener('click', async () => {
     try {
       const formData = new FormData();
       formData.append('video', bj.file);
-      formData.append('target_lang', targetLang.value);
+      formData.append('target_langs', Array.from(selectedTargetLangs).join(','));
       formData.append('source_lang', sourceLang.value);
       formData.append('whisper_model', whisperModel.value);
       formData.append('batch_size', batchSize.value);
@@ -1253,7 +1479,42 @@ function showBatchResults() {
     resultsSubtitle.textContent = 'Your files are ready to download';
   }
 
+  // Group successful files by lang so we can offer bulk per-lang ZIP downloads.
+  // Only show this section if at least one lang has more than 1 file — if every
+  // lang has just 1 file, the per-file download links are already enough.
+  const langGroups = new Map();  // lang_code → {jobIds: Set, files: [...]}
+  for (const bj of batchJobs) {
+    if (bj.status !== 'done' || !bj.data?.files) continue;
+    for (const f of bj.data.files) {
+      if (!f.lang) continue;  // skip fallback "Original video" entries
+      if (!langGroups.has(f.lang)) langGroups.set(f.lang, { jobIds: new Set(), files: [] });
+      const g = langGroups.get(f.lang);
+      g.jobIds.add(bj.jobId);
+      g.files.push(f);
+    }
+  }
+  const showBulk = Array.from(langGroups.values()).some(g => g.files.length > 1);
+
   let html = '';
+  if (showBulk) {
+    html += `<div class="bulk-download-section">
+      <div style="font-weight:500;font-size:13px;color:var(--grey-700);margin-bottom:8px;">
+        <span class="material-icons-outlined" style="font-size:16px;vertical-align:-3px;">archive</span>
+        Download all by language
+      </div>
+      <div class="bulk-download-row">`;
+    for (const [code, group] of langGroups) {
+      const lang = _allLanguages.find(l => l.code === code);
+      const langName = lang ? lang.name : code;
+      const jobIds = Array.from(group.jobIds).join(',');
+      html += `<a class="btn-bulk-download" href="/api/download-batch?job_ids=${jobIds}&lang=${code}" download>
+        <span class="material-icons-outlined" style="font-size:16px">download</span>
+        ${langName} (${group.files.length} files)
+      </a>`;
+    }
+    html += '</div></div>';
+  }
+
   for (const bj of batchJobs) {
     if (bj.status === 'done' && bj.data && bj.data.files && bj.data.files.length > 0) {
       if (batchJobs.length > 1) {
