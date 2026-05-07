@@ -73,15 +73,31 @@ def classify_tier(keys: list[dict[str, str]]) -> dict:
     }
 
 
+_banner_signature: tuple | None = None
+
+
 def _log_tier_banner(summary: dict) -> None:
     """Emit a prominent log line describing the pricing posture.
+
+    Idempotent within a process: if the resolved tier signature hasn't
+    changed since the last call (same tier + same provider mix), skip the
+    log. Stops the banner from spamming once per /api/quota poll (which
+    re-runs load_keys every 30s per connected UI client). Re-fires only
+    when the env actually changes — that's exactly when you want to know.
 
     Goal: if the user accidentally adds a paid provider key (Vertex or Grok),
     they see a loud warning at startup instead of discovering the bill later.
     """
+    global _banner_signature
     tier = summary["tier"]
+    by_provider = summary.get("by_provider", {})
+    signature = (tier, tuple(sorted(by_provider.items())))
+    if signature == _banner_signature:
+        return
+    _banner_signature = signature
+
     breakdown = ", ".join(
-        f"{n}× {p.title()}" for p, n in summary["by_provider"].items()
+        f"{n}× {p.title()}" for p, n in by_provider.items()
     ) or "no keys"
 
     if tier == "free":
@@ -96,6 +112,12 @@ def _log_tier_banner(summary: dict) -> None:
             f"[TIER] MIXED MODE — {breakdown}. Round-robin will route some calls to "
             f"paid providers. Comment out paid provider keys in .env to stay free."
         )
+
+
+def _reset_banner_for_tests() -> None:
+    """Test-only: clear the dedupe so each test sees a fresh banner state."""
+    global _banner_signature
+    _banner_signature = None
 
 
 def _split_keys(value: str | None) -> list[str]:
