@@ -78,6 +78,22 @@ body {
 .topbar h1 span { color: var(--grey-500); font-weight: 300; font-size: 14px; margin-left: 8px; }
 
 /* ─── Quota pill (free-tier usage indicator) ───────────────────── */
+.tier-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px; font-weight: 600;
+  font-family: 'Google Sans', sans-serif;
+  margin-left: 12px;
+  cursor: help;
+}
+.tier-badge.tier-free  { background: #e6f4ea; color: #137333; border: 1px solid #ceead6; }
+.tier-badge.tier-paid  { background: #fce8e6; color: #c5221f; border: 1px solid #f4c7c3; }
+.tier-badge.tier-mixed { background: #fef7e0; color: #b06000; border: 1px solid #fde293; }
+.tier-badge.tier-empty { background: var(--grey-100); color: var(--grey-700); border: 1px solid var(--grey-200); }
+.tier-badge.hidden { display: none; }
+.tier-badge .material-icons-outlined { font-size: 14px; }
+
 .quota-pill {
   margin-left: auto;
   display: flex; align-items: center; gap: 8px;
@@ -692,6 +708,10 @@ body {
     <span class="material-icons-outlined">translate</span>
   </div>
   <h1>Video Translator <span>Whisper + Gemini AI</span></h1>
+  <div class="tier-badge hidden" id="tierBadge" title="">
+    <span class="material-icons-outlined">verified</span>
+    <span id="tierBadgeText">—</span>
+  </div>
   <div class="quota-pill hidden" id="quotaPill" title="">
     <span class="material-icons-outlined">bolt</span>
     <span id="quotaText">—</span>
@@ -968,11 +988,33 @@ let pollTimer = null;
 let batchStartTime = null;
 const MAX_FILES = 30;
 
-// ─── Quota pill (free-tier usage) ─────────────────────────────────
+// ─── Quota pill (free-tier usage) + tier badge ────────────────────
+function _renderTierBadge(tierInfo) {
+  const badge = document.getElementById('tierBadge');
+  const text = document.getElementById('tierBadgeText');
+  if (!tierInfo || tierInfo.tier === 'empty') {
+    badge.classList.add('hidden');
+    return;
+  }
+  badge.classList.remove('hidden', 'tier-free', 'tier-paid', 'tier-mixed', 'tier-empty');
+  badge.classList.add('tier-' + tierInfo.tier);
+  const labels = { free: 'Free tier', paid: 'PAID — billed', mixed: 'MIXED — partial billing' };
+  text.textContent = labels[tierInfo.tier] || tierInfo.tier;
+  const breakdown = Object.entries(tierInfo.by_provider || {})
+    .map(([p, n]) => `${n}× ${p}`).join(', ');
+  badge.title =
+    `Translation pricing tier: ${tierInfo.tier.toUpperCase()}\n` +
+    `Loaded keys: ${breakdown || 'none'}\n` +
+    `Free: ${tierInfo.free_count}, Paid: ${tierInfo.paid_count}\n` +
+    (tierInfo.tier === 'free'
+      ? '$0 mode — no billable provider loaded.'
+      : 'Some/all calls will be billed. Remove paid keys from .env to stay free.');
+}
 async function updateQuota() {
   try {
     const r = await fetch('/api/quota');
     const q = await r.json();
+    _renderTierBadge(q.tier);
     const pill = document.getElementById('quotaPill');
     const txt = document.getElementById('quotaText');
     const bar = document.getElementById('quotaBarFill');

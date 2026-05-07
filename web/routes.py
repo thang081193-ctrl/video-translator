@@ -48,18 +48,29 @@ async def health_check():
 
 @router.get("/quota")
 async def quota_status():
-    """Free-tier quota usage per Gemini key + reset time.
+    """Free-tier quota usage per Gemini key + reset time + pricing tier.
 
-    Used by the UI banner to show $0-mode usage progress. Aggregates per-key
-    counts so a single tier limit (1000 RPD) can be displayed against `n_keys`
-    projects worth of capacity.
+    Used by the UI quota pill (usage progress) and the tier badge ($0 mode
+    indicator). The `tier` field is the source-of-truth check for the user
+    "am I going to be billed?" — derived live from currently-loaded keys, so
+    it reflects the .env state at this moment, not at server startup.
     """
     from pipeline import quota
+    from pipeline.providers.factory import load_keys, classify_tier
+
     s = quota.get_usage_summary()
     counts = s["counts"]
     used_total = sum(counts.values())
     n_keys = max(len(counts), 1)
     capacity_total = s["limit_per_key"] * n_keys
+
+    # Best-effort tier check — if .env is broken (no keys at all) we still
+    # want /api/quota to respond with empty data instead of 500ing.
+    try:
+        tier_info = classify_tier(load_keys())
+    except Exception:
+        tier_info = {"tier": "empty", "free_count": 0, "paid_count": 0, "by_provider": {}}
+
     return {
         "used_total": used_total,
         "capacity_total": capacity_total,
@@ -70,6 +81,7 @@ async def quota_status():
         "reset_at_utc": s["reset_at_utc"],
         "hours_until_reset": s["hours_until_reset"],
         "date": s["date"],
+        "tier": tier_info,
     }
 
 

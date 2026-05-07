@@ -122,3 +122,60 @@ class TestLoadKeys:
         assert len(keys) == 3
         assert keys[0]["provider"] == "grok"
         assert keys[2]["provider"] == "gemini"
+
+
+class TestTierClassifier:
+    """Pricing-tier classifier — drives the startup banner + UI badge.
+
+    Catches the silent footgun where someone adds VERTEX_API_KEYS to .env
+    expecting "more capacity" without realizing every Vertex call gets billed.
+    """
+
+    def test_only_gemini_is_free(self):
+        from pipeline.providers.factory import classify_tier
+        keys = [{"provider": "gemini", "key": "g1"}, {"provider": "gemini", "key": "g2"}]
+        info = classify_tier(keys)
+        assert info["tier"] == "free"
+        assert info["free_count"] == 2
+        assert info["paid_count"] == 0
+        assert info["by_provider"] == {"gemini": 2}
+
+    def test_only_vertex_is_paid(self):
+        from pipeline.providers.factory import classify_tier
+        info = classify_tier([{"provider": "vertex", "key": "v1"}])
+        assert info["tier"] == "paid"
+        assert info["paid_count"] == 1
+
+    def test_only_grok_is_paid(self):
+        from pipeline.providers.factory import classify_tier
+        info = classify_tier([{"provider": "grok", "key": "xai-1"}])
+        assert info["tier"] == "paid"
+
+    def test_gemini_plus_vertex_is_mixed(self):
+        """Most dangerous footgun: user thinks "I have free Gemini" but
+        also added a Vertex key — round-robin will route some calls to
+        the paid provider. classify_tier must flag this loudly."""
+        from pipeline.providers.factory import classify_tier
+        info = classify_tier([
+            {"provider": "gemini", "key": "g1"},
+            {"provider": "vertex", "key": "v1"},
+        ])
+        assert info["tier"] == "mixed"
+        assert info["free_count"] == 1
+        assert info["paid_count"] == 1
+
+    def test_empty_keys(self):
+        from pipeline.providers.factory import classify_tier
+        info = classify_tier([])
+        assert info["tier"] == "empty"
+        assert info["free_count"] == 0
+        assert info["paid_count"] == 0
+        assert info["by_provider"] == {}
+
+    def test_unknown_provider_treated_as_paid(self):
+        """Defensive: an unrecognized provider name should classify as paid
+        (not free) — better to false-flag than miss a billable provider."""
+        from pipeline.providers.factory import classify_tier
+        info = classify_tier([{"provider": "openai", "key": "sk-1"}])
+        assert info["tier"] == "paid"
+        assert info["paid_count"] == 1

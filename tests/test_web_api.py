@@ -162,6 +162,33 @@ class TestStatusEndpoint:
         assert r.status_code == 404
 
 
+class TestQuotaEndpointTier:
+    """/api/quota includes a tier field that the UI uses for the $0-mode badge."""
+
+    def test_quota_response_has_tier_field(self, client, monkeypatch):
+        # Set up a known free-tier env (Gemini-only)
+        for var in ["GROK_API_KEYS", "GROK_API_KEY", "VERTEX_API_KEYS",
+                    "VERTEX_API_KEY", "GEMINI_API_KEY"]:
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("GEMINI_API_KEYS", "fake-gemini-key-1,fake-gemini-key-2")
+        r = client.get("/api/quota")
+        assert r.status_code == 200
+        body = r.json()
+        assert "tier" in body, "UI badge depends on this field"
+        assert body["tier"]["tier"] == "free"
+        assert body["tier"]["free_count"] == 2
+        assert body["tier"]["paid_count"] == 0
+
+    def test_quota_response_tier_empty_when_no_keys(self, client, monkeypatch):
+        """/api/quota must NOT 500 when .env is broken — UI still polls it."""
+        for var in ["GROK_API_KEYS", "GROK_API_KEY", "GEMINI_API_KEYS",
+                    "GEMINI_API_KEY", "VERTEX_API_KEYS", "VERTEX_API_KEY"]:
+            monkeypatch.delenv(var, raising=False)
+        r = client.get("/api/quota")
+        assert r.status_code == 200
+        assert r.json()["tier"]["tier"] == "empty"
+
+
 class TestDownloadEndpoint:
     def test_missing_job(self, client):
         r = client.get("/api/download/nonexistent/file.srt")

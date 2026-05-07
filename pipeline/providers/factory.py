@@ -20,6 +20,83 @@ PROVIDER_CLASSES: dict[str, type[TranslationProvider]] = {
     "vertex": VertexProvider,
 }
 
+# Pricing tier of each provider as of 2026-05.
+# - "free": has a free tier sufficient for sustained dev/personal use
+# - "paid": no free tier (or only trial credits) — every call is billed
+# This is what the startup banner uses to tell the user whether they're
+# operating in $0 mode or running up a bill. If you add a new provider,
+# update this table or the tier banner will misclassify.
+PROVIDER_TIERS: dict[str, str] = {
+    "gemini": "free",   # Gemini API: ~1000-1500 RPD/key free for Flash-Lite
+    "grok": "paid",     # xAI: $0.30/1M input tokens, no free tier
+    "vertex": "paid",   # Vertex AI: enterprise GCP product, every call billed
+}
+
+
+def classify_tier(keys: list[dict[str, str]]) -> dict:
+    """Summarize loaded keys by pricing tier.
+
+    Returns a dict with:
+    - tier: "free" | "paid" | "mixed" | "empty"
+    - free_count, paid_count: per-tier key counts
+    - by_provider: {provider_name: count}
+
+    Used by the startup banner and /api/quota so the user can see at a
+    glance whether the running config is $0 or potentially billable.
+    """
+    free_count = 0
+    paid_count = 0
+    by_provider: dict[str, int] = {}
+    for k in keys:
+        provider = k["provider"]
+        by_provider[provider] = by_provider.get(provider, 0) + 1
+        tier = PROVIDER_TIERS.get(provider, "paid")  # Unknown defaults to paid (safer)
+        if tier == "free":
+            free_count += 1
+        else:
+            paid_count += 1
+
+    if not keys:
+        tier = "empty"
+    elif paid_count == 0:
+        tier = "free"
+    elif free_count == 0:
+        tier = "paid"
+    else:
+        tier = "mixed"
+
+    return {
+        "tier": tier,
+        "free_count": free_count,
+        "paid_count": paid_count,
+        "by_provider": by_provider,
+    }
+
+
+def _log_tier_banner(summary: dict) -> None:
+    """Emit a prominent log line describing the pricing posture.
+
+    Goal: if the user accidentally adds a paid provider key (Vertex or Grok),
+    they see a loud warning at startup instead of discovering the bill later.
+    """
+    tier = summary["tier"]
+    breakdown = ", ".join(
+        f"{n}× {p.title()}" for p, n in summary["by_provider"].items()
+    ) or "no keys"
+
+    if tier == "free":
+        log.info(f"[TIER] FREE-TIER MODE — {breakdown}, no billable providers loaded.")
+    elif tier == "paid":
+        log.warning(
+            f"[TIER] PAID MODE — {breakdown}. EVERY translation call WILL be billed. "
+            f"Remove paid keys from .env to stay free."
+        )
+    elif tier == "mixed":
+        log.warning(
+            f"[TIER] MIXED MODE — {breakdown}. Round-robin will route some calls to "
+            f"paid providers. Comment out paid provider keys in .env to stay free."
+        )
+
 
 def _split_keys(value: str | None) -> list[str]:
     if not value:
@@ -68,6 +145,7 @@ def load_keys() -> list[dict[str, str]]:
             "and/or VERTEX_API_KEYS to .env"
         )
 
+    _log_tier_banner(classify_tier(loaded))
     return loaded
 
 
