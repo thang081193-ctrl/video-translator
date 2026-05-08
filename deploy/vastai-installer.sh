@@ -269,6 +269,11 @@ if [[ "$DRY_RUN" != "1" && ! -f "$SENTINEL_DIR/step-8.done" && "$SKIP_STEP" -lt 
         [[ -n "$GEMINI_KEYS" ]] && echo "GEMINI_API_KEYS=$GEMINI_KEYS"
         [[ -n "$GROK_KEYS" ]] && echo "GROK_API_KEYS=$GROK_KEYS"
         [[ -n "$VERTEX_KEYS" ]] && echo "VERTEX_API_KEYS=$VERTEX_KEYS"
+        # NVENC: Vast.ai consumer GPUs (RTX 30xx/40xx) typically have ffmpeg
+        # h264_nvenc compiled in but the host driver blocks OpenEncodeSessionEx
+        # ("unsupported device (2)") — convert/burn fail with exit 187. Force
+        # libx264 by default. Override with USE_NVENC=true if your host supports it.
+        echo "USE_NVENC=false"
     } > "$ENV_FILE"
     chmod 600 "$ENV_FILE"
     echo "  → wrote $ENV_FILE (mode 600)"

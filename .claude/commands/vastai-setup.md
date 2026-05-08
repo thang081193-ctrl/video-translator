@@ -58,9 +58,11 @@ NGROK_TOKEN=2abc... GEMINI_KEYS=key1,key2,key3 \
 5. Install ngrok binary + add authtoken
 6. Install cloudflared binary
 7. **Pre-download all ML models WITH PROGRESS** (Whisper medium+large-v3, EasyOCR en+vi, Demucs htdemucs)
-8. Write `.env` from $GEMINI_KEYS / $GROK_KEYS / $VERTEX_KEYS
+8. Write `.env` from $GEMINI_KEYS / $GROK_KEYS / $VERTEX_KEYS (also sets `USE_NVENC=false`)
 9. Health check (start server, curl /api/health)
 
 If a step fails, re-run with `SKIP_STEP=<N-1>` to resume. If unsure where it failed, run with `RESET=1` to start over.
+
+**NVENC note**: Vast.ai consumer GPUs (RTX 30xx/40xx) ship ffmpeg with `h264_nvenc` compiled but the host driver typically blocks `OpenEncodeSessionEx` (error: "unsupported device (2)") — convert/burn step then fails with exit 187. The installer hard-codes `USE_NVENC=false` in `.env` to force libx264 (CPU encode). User can override with `USE_NVENC=true` if they verify NVENC works on their specific instance via `ffmpeg -hide_banner -f lavfi -i testsrc=duration=1:size=1280x720:rate=30 -c:v h264_nvenc -f null -`.
 
 After install, start the server with `/vastai-start`.
