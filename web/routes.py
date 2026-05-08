@@ -133,6 +133,7 @@ async def start_translation(
     bgm_volume: float = Form(default=0.25),
     translate_ocr: str = Form(default="false"),
     ocr_quality: str = Form(default="fast"),
+    convert_preset: str = Form(default=""),
 ):
     """Upload video and start a translation job.
 
@@ -173,6 +174,18 @@ async def start_translation(
         ocr_quality = "fast"
     batch_size = max(1, batch_size)
     bgm_volume = max(0.05, min(1.0, bgm_volume))
+
+    # Validate convert_preset against the registry — empty string = no convert.
+    convert_preset_clean: str | None = None
+    if convert_preset.strip():
+        from pipeline.convert import PRESETS
+        if convert_preset not in PRESETS:
+            return JSONResponse(
+                {"error": f"Unsupported convert_preset '{convert_preset}'. "
+                          f"Must be one of: {sorted(PRESETS)}"},
+                status_code=400,
+            )
+        convert_preset_clean = convert_preset
 
     job_id = str(uuid.uuid4())[:8]
     upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
@@ -218,11 +231,12 @@ async def start_translation(
         translate_ocr=translate_ocr,
         ocr_quality=ocr_quality,
         output_dir=job_dir,
+        convert_preset=convert_preset_clean,
     )
 
     log.info(f"Job {job_id}: video={video_filename}, langs={parsed_langs}, "
              f"burn={burn}, dub={dub}, ocr={translate_ocr}, model={whisper_model}, "
-             f"audio_mode={audio_mode}")
+             f"audio_mode={audio_mode}, convert={convert_preset_clean or 'none'}")
     create_job(job_id, params, video_filename)
 
     return {"job_id": job_id}

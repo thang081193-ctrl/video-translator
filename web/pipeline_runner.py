@@ -37,6 +37,11 @@ class PipelineParams:
     `target_langs` is the source of truth for fan-out. A single-lang job
     is just `target_langs=["vi"]`; multi-lang jobs reuse extract_audio,
     transcribe, and Demucs across the langs.
+
+    `convert_preset` (e.g. "reels") triggers an upfront re-encode to a
+    platform spec before any other stage. When set, `video_path` is
+    mutated in-place to point to the converted file and the original is
+    deleted to save disk on Vast.ai.
     """
     video_path: str
     target_langs: list[str] = field(default_factory=list)
@@ -53,10 +58,18 @@ class PipelineParams:
     ocr_quality: str = "fast"
     use_cache: bool = True
     output_dir: str | None = None
+    convert_preset: str | None = None
 
     def __post_init__(self):
         if not self.target_langs:
             raise ValueError("PipelineParams.target_langs must contain at least one lang")
+        if self.convert_preset is not None:
+            from pipeline.convert import PRESETS
+            if self.convert_preset not in PRESETS:
+                raise ValueError(
+                    f"Unknown convert_preset '{self.convert_preset}'. "
+                    f"Must be one of: {sorted(PRESETS)}"
+                )
 
 
 @dataclass
@@ -107,6 +120,8 @@ def _per_lang_step_count(params: PipelineParams) -> int:
 def count_steps(params: PipelineParams) -> int:
     """Total UI steps for the whole job (shared + per-lang × N langs)."""
     shared = 2  # extract_audio, transcribe
+    if params.convert_preset:
+        shared += 1  # convert runs once, before extract_audio
     if params.dub and params.audio_mode == "keep_original_bgm":
         shared += 1  # Demucs separation, run once and reused across langs
     return shared + len(params.target_langs) * _per_lang_step_count(params)
@@ -152,12 +167,14 @@ def estimate_eta_seconds(
     """
     vd = max(video_duration_sec, 1.0)
 
-    # Shared: Whisper transcribe + (optional Demucs) — independent of N langs
+    # Shared: Whisper transcribe + (optional Demucs/convert) — independent of N langs
     shared = vd * 0.35
     if params.whisper_model == "large-v3":
         shared *= 3.0
     if params.dub and params.audio_mode == "keep_original_bgm":
         shared += vd * 0.6  # Demucs ≈ 0.6× real-time on 3060
+    if params.convert_preset:
+        shared += vd * 0.3  # NVENC re-encode ≈ 0.3× real-time
 
     # Per-lang: TTS + mix + merge + burn — each runs once per lang
     per_lang = vd * 0.25  # baseline translate+srt+light I/O
@@ -209,7 +226,34 @@ def run_pipeline(
 
     n_langs = len(params.target_langs)
 
-    # ─── Shared phase ────────────────────────────────────────────────────────
+    # ─── Optional convert step ───────────────────────────────────────────────
+    # Runs first so all downstream stages (OCR, drawtext, subtitle burn)
+    # operate in the target preset's coordinate space. Original is deleted
+    # post-convert; params.video_path is rewritten to the converted file.
+    if params.convert_preset:
+        from pipeline.convert import PRESETS, convert_video, verify_output
+        preset = PRESETS[params.convert_preset]
+        progress(f"Converting to {preset.name} ({preset.width}×{preset.height})", 2)
+
+        original_path = params.video_path
+        target_path = os.path.join(job_dir, f"{video_base}.mp4")
+        tmp_path = os.path.join(job_dir, f"_converting_{video_base}.mp4")
+
+        with _stage(result, "convert"):
+            convert_video(original_path, tmp_path, preset)
+
+        if os.path.abspath(original_path) != os.path.abspath(target_path):
+            try:
+                os.remove(original_path)
+            except OSError:
+                pass
+        os.replace(tmp_path, target_path)
+        params.video_path = target_path
+
+        issues = verify_output(target_path, preset)
+        if issues:
+            log.warning(f"Convert verify: {'; '.join(issues)}")
+        progress_update(f"Converted to {preset.name}", 5)
 
     progress("Extracting audio", 5)
     with _stage(result, "extract_audio"):

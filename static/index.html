@@ -779,6 +779,13 @@ body {
         <label>Batch size</label>
         <input type="number" id="batchSize" value="20" min="1" max="50">
       </div>
+      <div class="form-group">
+        <label>Convert format <span style="font-weight:400;color:var(--grey-500);font-size:12px;">(re-encode before translate)</span></label>
+        <select id="convertPreset">
+          <option value="">None — keep original resolution</option>
+          <option value="reels">Reels (1080×1920) — Meta Ads safe zone</option>
+        </select>
+      </div>
 
       <div class="form-group full-width">
         <label>Options</label>
@@ -943,6 +950,7 @@ const targetLangFilter = $('targetLangFilter');
 const selectedTargetLangs = new Set();  // Set<langCode>, order preserved by render
 const whisperModel = $('whisperModel');
 const batchSize = $('batchSize');
+const convertPreset = $('convertPreset');
 const burnCheck = $('burnCheck');
 const dubCheck = $('dubCheck');
 const ocrCheck = $('ocrCheck');
@@ -1290,6 +1298,7 @@ submitBtn.addEventListener('click', async () => {
       formData.append('source_lang', sourceLang.value);
       formData.append('whisper_model', whisperModel.value);
       formData.append('batch_size', batchSize.value);
+      if (convertPreset.value) formData.append('convert_preset', convertPreset.value);
       formData.append('burn', burnCheck.checked);
       formData.append('dub', dubCheck.checked);
       formData.append('translate_ocr', ocrCheck.checked);

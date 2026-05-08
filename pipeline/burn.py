@@ -3,50 +3,11 @@ import subprocess
 
 from pipeline.audio import check_ffmpeg
 from pipeline.config import cfg
+from pipeline.encoder import video_encoding_args as _video_encoding_args
 from pipeline.errors import FatalError
 from pipeline.logger import get_logger
 
 log = get_logger("Burn")
-
-
-# ─── NVENC hardware encoding detection ───────────────────────────────────────
-
-_nvenc_available: bool | None = None
-
-
-def _check_nvenc() -> bool:
-    """Check if NVENC hardware encoder is available in ffmpeg (cached).
-
-    Respects cfg.burn.use_nvenc master switch. Returns False quickly if
-    the flag is disabled or ffmpeg doesn't report h264_nvenc.
-    """
-    global _nvenc_available
-    if not cfg.burn.use_nvenc:
-        return False
-    if _nvenc_available is not None:
-        return _nvenc_available
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
-            capture_output=True, text=True, timeout=cfg.ffmpeg.timeout_short,
-        )
-        _nvenc_available = "h264_nvenc" in result.stdout
-    except Exception:
-        _nvenc_available = False
-    if _nvenc_available:
-        log.info("NVENC hardware encoder detected — using GPU encoding")
-    return _nvenc_available
-
-
-def _video_encoding_args() -> list[str]:
-    """Return ffmpeg video encoding args: NVENC if available, else CPU libx264."""
-    if _check_nvenc():
-        return [
-            "-c:v", "h264_nvenc",
-            "-preset", cfg.burn.nvenc_preset,
-            "-cq", str(cfg.burn.nvenc_cq),
-        ]
-    return ["-crf", str(cfg.burn.crf), "-preset", cfg.burn.preset]
 
 
 # ─── Filter script helper (Windows cmd length limit workaround) ──────────────
