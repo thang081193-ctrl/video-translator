@@ -281,6 +281,7 @@ def run_pipeline(
                 "name": os.path.basename(target_path),
                 "type": "video",
                 "label": f"Converted ({preset.name} {preset.width}×{preset.height})",
+                "kind": "converted",
             })
             try:
                 empty_cuda_cache()

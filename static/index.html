@@ -1542,37 +1542,51 @@ function showBatchResults() {
     resultsSubtitle.textContent = 'Your files are ready to download';
   }
 
-  // Group successful files by lang so we can offer bulk per-lang ZIP downloads.
-  // Only show this section if at least one lang has more than 1 file — if every
-  // lang has just 1 file, the per-file download links are already enough.
-  const langGroups = new Map();  // lang_code → {jobIds: Set, files: [...]}
+  // Group successful files into buckets we can offer as bulk ZIPs. Files tagged
+  // with `lang` go into per-lang groups; convert-only output is tagged with
+  // `kind` instead (no associated language). Only show the bulk section if at
+  // least one bucket has >1 file — single-file groups are already covered by
+  // the per-file download link.
+  // Map key is "lang:vi" / "kind:converted" so the two namespaces don't collide.
+  const groups = new Map();
   for (const bj of batchJobs) {
     if (bj.status !== 'done' || !bj.data?.files) continue;
     for (const f of bj.data.files) {
-      if (!f.lang) continue;  // skip fallback "Original video" entries
-      if (!langGroups.has(f.lang)) langGroups.set(f.lang, { jobIds: new Set(), files: [] });
-      const g = langGroups.get(f.lang);
+      let type, key;
+      if (f.lang) { type = 'lang'; key = f.lang; }
+      else if (f.kind) { type = 'kind'; key = f.kind; }
+      else continue;  // skip fallback "Original video" entries
+      const id = `${type}:${key}`;
+      if (!groups.has(id)) groups.set(id, { type, key, jobIds: new Set(), files: [] });
+      const g = groups.get(id);
       g.jobIds.add(bj.jobId);
       g.files.push(f);
     }
   }
-  const showBulk = Array.from(langGroups.values()).some(g => g.files.length > 1);
+  const showBulk = Array.from(groups.values()).some(g => g.files.length > 1);
 
   let html = '';
   if (showBulk) {
     html += `<div class="bulk-download-section">
       <div style="font-weight:500;font-size:13px;color:var(--grey-700);margin-bottom:8px;">
         <span class="material-icons-outlined" style="font-size:16px;vertical-align:-3px;">archive</span>
-        Download all by language
+        Download all
       </div>
       <div class="bulk-download-row">`;
-    for (const [code, group] of langGroups) {
-      const lang = _allLanguages.find(l => l.code === code);
-      const langName = lang ? lang.name : code;
+    for (const [, group] of groups) {
+      let displayName, queryParam;
+      if (group.type === 'lang') {
+        const lang = _allLanguages.find(l => l.code === group.key);
+        displayName = lang ? lang.name : group.key;
+        queryParam = `lang=${group.key}`;
+      } else {
+        displayName = group.key === 'converted' ? 'Converted videos' : group.key;
+        queryParam = `kind=${group.key}`;
+      }
       const jobIds = Array.from(group.jobIds).join(',');
-      html += `<a class="btn-bulk-download" href="/api/download-batch?job_ids=${jobIds}&lang=${code}" download>
+      html += `<a class="btn-bulk-download" href="/api/download-batch?job_ids=${jobIds}&${queryParam}" download>
         <span class="material-icons-outlined" style="font-size:16px">download</span>
-        ${langName} (${group.files.length} files)
+        ${displayName} (${group.files.length} files)
       </a>`;
     }
     html += '</div></div>';

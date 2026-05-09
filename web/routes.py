@@ -313,27 +313,46 @@ async def download_file(job_id: str, filename: str):
     return FileResponse(file_path, filename=filename)
 
 
+_KNOWN_KINDS = {"converted"}
+
+
 @router.get("/download-batch")
-async def download_batch(job_ids: str, lang: str):
-    """Bundle all result files for one target lang across multiple jobs into a ZIP.
+async def download_batch(job_ids: str, lang: str = "", kind: str = ""):
+    """Bundle all result files matching a group across multiple jobs into a ZIP.
 
-    Used by the per-lang "Download all" buttons in the batch results view.
-    Filters to files tagged with `lang == ?lang` (set in pipeline_runner._process_one_lang).
-    Files without a `lang` field (e.g. fallback "Original video" entries) are skipped.
+    Filtering modes (exactly one required):
+      - `lang=<code>` — files tagged with that target lang (translate/dub/burn outputs)
+      - `kind=<id>` — files tagged with that kind (currently `converted` for
+        convert-only output that has no associated language)
 
-    On filename collisions across jobs (same source video uploaded twice), the
-    second occurrence is prefixed with the job_id so both end up in the ZIP.
+    Used by the "Download all" buttons in the batch results view. On filename
+    collisions across jobs (same source video uploaded twice), the second
+    occurrence is prefixed with the job_id so both end up in the ZIP.
     """
     job_id_list = [j.strip() for j in job_ids.split(",") if j.strip()]
     if not job_id_list:
         return JSONResponse({"error": "job_ids is required (comma-separated)"}, status_code=400)
-    if lang not in ALL_LANGUAGE_CODES:
+
+    if bool(lang) == bool(kind):
+        return JSONResponse(
+            {"error": "exactly one of `lang` or `kind` is required"},
+            status_code=400,
+        )
+    if lang and lang not in ALL_LANGUAGE_CODES:
         return JSONResponse(
             {"error": f"Unsupported lang '{lang}'. Must be one of: {sorted(ALL_LANGUAGE_CODES)}"},
             status_code=400,
         )
+    if kind and kind not in _KNOWN_KINDS:
+        return JSONResponse(
+            {"error": f"Unsupported kind '{kind}'. Must be one of: {sorted(_KNOWN_KINDS)}"},
+            status_code=400,
+        )
 
     upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
+
+    def _matches(f: dict) -> bool:
+        return f.get("lang") == lang if lang else f.get("kind") == kind
 
     # Collect matching files across all completed jobs
     files_to_zip: list[tuple[str, str, str]] = []
@@ -342,15 +361,16 @@ async def download_batch(job_ids: str, lang: str):
         if not job or job.get("status") != "done":
             continue
         for f in job.get("files", []):
-            if f.get("lang") != lang:
+            if not _matches(f):
                 continue
             file_path = os.path.join(upload_dir, job_id, f["name"])
             if os.path.isfile(file_path):
                 files_to_zip.append((job_id, f["name"], file_path))
 
+    label = f"lang={lang}" if lang else f"kind={kind}"
     if not files_to_zip:
         return JSONResponse(
-            {"error": f"No completed files found for lang={lang} in given jobs"},
+            {"error": f"No completed files found for {label} in given jobs"},
             status_code=404,
         )
 
@@ -372,11 +392,12 @@ async def download_batch(job_ids: str, lang: str):
             pass
         raise
 
-    log.info(f"download-batch lang={lang}: bundled {len(files_to_zip)} files from {len(job_id_list)} jobs")
+    log.info(f"download-batch {label}: bundled {len(files_to_zip)} files from {len(job_id_list)} jobs")
+    zip_basename = f"batch-{lang or kind}.zip"
     return FileResponse(
         tmp.name,
         media_type="application/zip",
-        filename=f"batch-{lang}.zip",
+        filename=zip_basename,
         background=BackgroundTask(_unlink_quiet, tmp.name),
     )
 
