@@ -785,6 +785,11 @@ body {
           <option value="">None — keep original resolution</option>
           <option value="reels">Reels (1080×1920) — Meta Ads safe zone</option>
         </select>
+        <label class="toggle" id="toggleConvertOnly" style="margin-top:10px; display:none;">
+          <input type="checkbox" id="convertOnlyCheck">
+          <span class="material-icons-outlined">cut</span>
+          Convert only (skip translate)
+        </label>
       </div>
 
       <div class="form-group full-width">
@@ -951,6 +956,8 @@ const selectedTargetLangs = new Set();  // Set<langCode>, order preserved by ren
 const whisperModel = $('whisperModel');
 const batchSize = $('batchSize');
 const convertPreset = $('convertPreset');
+const convertOnlyCheck = $('convertOnlyCheck');
+const toggleConvertOnly = $('toggleConvertOnly');
 const burnCheck = $('burnCheck');
 const dubCheck = $('dubCheck');
 const ocrCheck = $('ocrCheck');
@@ -1215,6 +1222,43 @@ function formatSize(bytes) {
   return (bytes / 1073741824).toFixed(2) + ' GB';
 }
 
+// ─── Convert-only toggle ─────────────────────────────────────────
+// "Convert only" is only meaningful when a preset is picked. Hidden until then.
+convertPreset.addEventListener('change', () => {
+  const hasPreset = !!convertPreset.value;
+  toggleConvertOnly.style.display = hasPreset ? '' : 'none';
+  if (!hasPreset) {
+    convertOnlyCheck.checked = false;
+    toggleConvertOnly.classList.remove('active');
+    applyConvertOnlyMode(false);
+  }
+  updateSubmitState();
+});
+
+convertOnlyCheck.addEventListener('change', () => {
+  toggleConvertOnly.classList.toggle('active', convertOnlyCheck.checked);
+  applyConvertOnlyMode(convertOnlyCheck.checked);
+  updateSubmitState();
+});
+
+function applyConvertOnlyMode(on) {
+  // Disable + uncheck translate-related options when in convert-only mode.
+  for (const cb of [burnCheck, dubCheck, ocrCheck]) {
+    if (on) cb.checked = false;
+    cb.disabled = on;
+  }
+  toggleBurn.classList.toggle('disabled', on);
+  toggleDub.classList.toggle('disabled', on);
+  toggleOcr.classList.toggle('disabled', on);
+  if (on) {
+    toggleBurn.classList.remove('active');
+    toggleDub.classList.remove('active');
+    toggleOcr.classList.remove('active');
+    bgmSection.classList.remove('visible');
+    ocrQualitySection.style.display = 'none';
+  }
+}
+
 // ─── Toggles ──────────────────────────────────────────────────────
 burnCheck.addEventListener('change', () => toggleBurn.classList.toggle('active', burnCheck.checked));
 ocrCheck.addEventListener('change', () => {
@@ -1270,7 +1314,13 @@ function getAudioMode() {
 }
 
 function updateSubmitState() {
-  if (!selectedVideos.length || !selectedTargetLangs.size) { submitBtn.disabled = true; return; }
+  if (!selectedVideos.length) { submitBtn.disabled = true; return; }
+  // Convert-only path: only the preset is required.
+  if (convertOnlyCheck.checked) {
+    submitBtn.disabled = !convertPreset.value;
+    return;
+  }
+  if (!selectedTargetLangs.size) { submitBtn.disabled = true; return; }
   if (dubCheck.checked && getAudioMode() === 'custom_bgm' && !selectedBgm) {
     submitBtn.disabled = true; return;
   }
@@ -1294,19 +1344,23 @@ submitBtn.addEventListener('click', async () => {
     try {
       const formData = new FormData();
       formData.append('video', bj.file);
-      formData.append('target_langs', Array.from(selectedTargetLangs).join(','));
-      formData.append('source_lang', sourceLang.value);
-      formData.append('whisper_model', whisperModel.value);
-      formData.append('batch_size', batchSize.value);
+      const convertOnly = convertOnlyCheck.checked;
+      if (!convertOnly) {
+        formData.append('target_langs', Array.from(selectedTargetLangs).join(','));
+        formData.append('source_lang', sourceLang.value);
+        formData.append('whisper_model', whisperModel.value);
+        formData.append('batch_size', batchSize.value);
+      }
       if (convertPreset.value) formData.append('convert_preset', convertPreset.value);
-      formData.append('burn', burnCheck.checked);
-      formData.append('dub', dubCheck.checked);
-      formData.append('translate_ocr', ocrCheck.checked);
-      if (ocrCheck.checked) {
+      if (convertOnly) formData.append('convert_only', 'true');
+      formData.append('burn', !convertOnly && burnCheck.checked);
+      formData.append('dub', !convertOnly && dubCheck.checked);
+      formData.append('translate_ocr', !convertOnly && ocrCheck.checked);
+      if (!convertOnly && ocrCheck.checked) {
         const ocrQual = document.querySelector('input[name="ocrQuality"]:checked');
         formData.append('ocr_quality', ocrQual ? ocrQual.value : 'fast');
       }
-      if (dubCheck.checked) {
+      if (!convertOnly && dubCheck.checked) {
         formData.append('audio_mode', getAudioMode());
         formData.append('bgm_volume', (bgmVolumeSlider.value / 100).toFixed(2));
         if (getAudioMode() === 'custom_bgm' && selectedBgm) {

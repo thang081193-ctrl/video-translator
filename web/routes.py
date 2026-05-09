@@ -134,17 +134,41 @@ async def start_translation(
     translate_ocr: str = Form(default="false"),
     ocr_quality: str = Form(default="fast"),
     convert_preset: str = Form(default=""),
+    convert_only: str = Form(default="false"),
 ):
     """Upload video and start a translation job.
 
     `target_langs` is a comma-separated list of target codes (e.g. "vi,en,ja").
     Legacy `target_lang` (single code) is also accepted for back-compat with
     older clients but maps to a 1-element list.
+
+    `convert_only=true` produces just the re-encoded video (requires
+    `convert_preset`); `target_langs` is not required in that mode.
     """
-    # Resolve langs from new field, falling back to legacy single field
+    convert_only_b = _parse_bool(convert_only)
+
+    # Validate convert_preset against the registry — empty string = no convert.
+    convert_preset_clean: str | None = None
+    if convert_preset.strip():
+        from pipeline.convert import PRESETS
+        if convert_preset not in PRESETS:
+            return JSONResponse(
+                {"error": f"Unsupported convert_preset '{convert_preset}'. "
+                          f"Must be one of: {sorted(PRESETS)}"},
+                status_code=400,
+            )
+        convert_preset_clean = convert_preset
+
+    if convert_only_b and not convert_preset_clean:
+        return JSONResponse(
+            {"error": "convert_only=true requires convert_preset to be set"},
+            status_code=400,
+        )
+
+    # Resolve langs — required unless convert_only.
     raw_langs = target_langs.strip() or target_lang.strip()
     parsed_langs = [c.strip() for c in raw_langs.split(",") if c.strip()]
-    if not parsed_langs:
+    if not parsed_langs and not convert_only_b:
         return JSONResponse(
             {"error": "target_langs is required (comma-separated language codes)"},
             status_code=400,
@@ -175,17 +199,12 @@ async def start_translation(
     batch_size = max(1, batch_size)
     bgm_volume = max(0.05, min(1.0, bgm_volume))
 
-    # Validate convert_preset against the registry — empty string = no convert.
-    convert_preset_clean: str | None = None
-    if convert_preset.strip():
-        from pipeline.convert import PRESETS
-        if convert_preset not in PRESETS:
-            return JSONResponse(
-                {"error": f"Unsupported convert_preset '{convert_preset}'. "
-                          f"Must be one of: {sorted(PRESETS)}"},
-                status_code=400,
-            )
-        convert_preset_clean = convert_preset
+    # convert_only short-circuits the pipeline; force-clear post-convert flags
+    # so the worker can't accidentally do extra work the user didn't ask for.
+    if convert_only_b:
+        burn = False
+        dub = False
+        translate_ocr = False
 
     job_id = str(uuid.uuid4())[:8]
     upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
@@ -232,11 +251,13 @@ async def start_translation(
         ocr_quality=ocr_quality,
         output_dir=job_dir,
         convert_preset=convert_preset_clean,
+        convert_only=convert_only_b,
     )
 
     log.info(f"Job {job_id}: video={video_filename}, langs={parsed_langs}, "
              f"burn={burn}, dub={dub}, ocr={translate_ocr}, model={whisper_model}, "
-             f"audio_mode={audio_mode}, convert={convert_preset_clean or 'none'}")
+             f"audio_mode={audio_mode}, convert={convert_preset_clean or 'none'}, "
+             f"convert_only={convert_only_b}")
     create_job(job_id, params, video_filename)
 
     return {"job_id": job_id}

@@ -68,6 +68,63 @@ class TestCountSteps:
         assert count_steps(one) == 8
         assert count_steps(five) == 28
 
+    def test_convert_only_is_single_step(self):
+        """convert_only short-circuits the pipeline — just the convert step."""
+        params = PipelineParams(
+            video_path="x.mp4", target_langs=[],
+            convert_preset="reels", convert_only=True,
+        )
+        assert count_steps(params) == 1
+
+    def test_convert_only_ignores_other_flags(self):
+        """convert_only=True drops to 1 step regardless of dub/burn/langs."""
+        params = PipelineParams(
+            video_path="x.mp4", target_langs=["vi", "en", "ja"],
+            convert_preset="reels", convert_only=True,
+            dub=True, burn=True, translate_ocr=True,
+            audio_mode="keep_original_bgm",
+        )
+        assert count_steps(params) == 1
+
+
+class TestConvertOnlyParams:
+    """Validate convert_only validation rules in PipelineParams.__post_init__."""
+
+    def test_convert_only_without_preset_raises(self):
+        with pytest.raises(ValueError, match="convert_preset"):
+            PipelineParams(
+                video_path="x.mp4", target_langs=[], convert_only=True,
+            )
+
+    def test_convert_only_without_target_langs_ok(self):
+        """target_langs may be empty when convert_only=True."""
+        params = PipelineParams(
+            video_path="x.mp4", target_langs=[],
+            convert_preset="reels", convert_only=True,
+        )
+        assert params.convert_only is True
+        assert params.target_langs == []
+
+    def test_convert_only_with_target_langs_ok(self):
+        """target_langs is allowed but ignored under convert_only."""
+        params = PipelineParams(
+            video_path="x.mp4", target_langs=["vi"],
+            convert_preset="reels", convert_only=True,
+        )
+        assert params.convert_only is True
+        assert params.target_langs == ["vi"]
+
+    def test_convert_only_invalid_preset_raises(self):
+        with pytest.raises(ValueError, match="Unknown convert_preset"):
+            PipelineParams(
+                video_path="x.mp4", target_langs=[],
+                convert_preset="bogus", convert_only=True,
+            )
+
+    def test_default_convert_only_false(self):
+        params = PipelineParams(video_path="x.mp4", target_langs=["vi"])
+        assert params.convert_only is False
+
 
 class TestPipelineParams:
     """Verify dataclass defaults match documented behavior."""
