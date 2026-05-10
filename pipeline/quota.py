@@ -21,17 +21,70 @@ from pipeline.logger import get_logger
 
 log = get_logger("Quota")
 
-DAILY_LIMIT_FREE = 1000          # RPD per project, Gemini Flash-Lite/Flash free tier
+# ─── Google Gemini free-tier rate limits (per project, verified 2026-05) ────
+# Source: https://ai.google.dev/gemini-api/docs/rate-limits + observed 429s.
+# Each project gets one bucket — even with many keys on the same project they
+# share the cap. Add new GCP projects (no billing) to scale linearly.
+MODEL_RATE_LIMITS: dict[str, dict[str, int]] = {
+    "gemini-2.5-flash-lite": {"rpm": 20,  "tpm": 250_000, "rpd": 1000},
+    "gemini-2.5-flash":      {"rpm": 10,  "tpm": 250_000, "rpd": 250},
+    "gemini-2.5-pro":        {"rpm": 5,   "tpm": 250_000, "rpd": 100},
+    # Older models if anyone still wires them up — safe fallback assumes
+    # the most restrictive tier that's still plausible.
+    "gemini-2.0-flash":      {"rpm": 15,  "tpm": 1_000_000, "rpd": 200},
+}
+DEFAULT_MODEL = "gemini-2.5-flash-lite"
+
+
+def model_limits(model: str) -> dict[str, int]:
+    """Return RPM/TPM/RPD for a model name; fall back to flash-lite if unknown."""
+    return MODEL_RATE_LIMITS.get(model, MODEL_RATE_LIMITS[DEFAULT_MODEL])
+
+
+# RPD limit for the active model — `cfg.translate.gemini_model` is the source
+# of truth for which model is in use, but quota.py is imported standalone in
+# some places so we resolve lazily via a getter.
+def daily_limit_for(model: str | None = None) -> int:
+    """RPD cap for the currently-configured model (or explicit override)."""
+    if model is None:
+        try:
+            from pipeline.config import cfg
+            model = cfg.translate.gemini_model
+        except Exception:
+            model = DEFAULT_MODEL
+    return model_limits(model)["rpd"]
+
+
+# Backwards-compat: legacy code imports DAILY_LIMIT_FREE directly. Keep it
+# pointing at the default model so old call sites stay correct.
+DAILY_LIMIT_FREE = MODEL_RATE_LIMITS[DEFAULT_MODEL]["rpd"]
 WARN_THRESHOLD = 0.80
 CRITICAL_THRESHOLD = 0.95
 
-# Suspicious activity detection
-# A normal batch run sits around 10-20 RPM (one batch every ~3-5s × 2 keys).
-# Sustained 30+ RPM crossing the 60s window means something automated is
-# hammering the key — likely a leak being abused, not normal user activity.
+# Suspicious activity detection — must stay BELOW the actual RPM cap so we
+# alert before Google starts 429ing. Default model is flash-lite (20 RPM);
+# sustained 18+ RPM in a 60s window means something is approaching the cap.
 SPIKE_WINDOW_SEC = 60
-SPIKE_RPM_THRESHOLD = 30
+_SPIKE_RPM_HEADROOM = 0.9  # alert at 90% of model cap
 SPIKE_REPEAT_COOLDOWN_SEC = 120  # Don't re-fire same alert more than once per 2min
+
+
+def _spike_threshold() -> int:
+    """Compute spike alert threshold from the active model's RPM cap.
+
+    Re-evaluated on each request so a config change (e.g. switching to
+    gemini-2.5-pro at 5 RPM) immediately tightens the alert window.
+    """
+    try:
+        from pipeline.config import cfg
+        rpm = model_limits(cfg.translate.gemini_model)["rpm"]
+    except Exception:
+        rpm = MODEL_RATE_LIMITS[DEFAULT_MODEL]["rpm"]
+    return max(1, int(rpm * _SPIKE_RPM_HEADROOM))
+
+
+# Backwards-compat constant for any caller still importing this name.
+SPIKE_RPM_THRESHOLD = _spike_threshold()
 
 _lock = threading.Lock()
 _STATE_PATH = Path(__file__).resolve().parent.parent / "_quota_state.json"
@@ -149,18 +202,19 @@ def _check_rate_spike() -> None:
 
     Called inside the lock by record_request after the timestamp is added.
     Trims _recent_request_times to the last SPIKE_WINDOW_SEC and fires an
-    alert if the count crosses SPIKE_RPM_THRESHOLD.
+    alert if the count crosses 90% of the active model's RPM cap.
     """
     now = time.time()
     cutoff = now - SPIKE_WINDOW_SEC
     while _recent_request_times and _recent_request_times[0] < cutoff:
         _recent_request_times.popleft()
     rpm = len(_recent_request_times)
-    if rpm >= SPIKE_RPM_THRESHOLD:
+    threshold = _spike_threshold()
+    if rpm >= threshold:
         msg = (
             f"Sustained rate spike: {rpm} req in last {SPIKE_WINDOW_SEC}s "
-            f"(threshold {SPIKE_RPM_THRESHOLD}). If you're not running a batch, "
-            f"a key may be leaking — rotate immediately."
+            f"(threshold {threshold}, ~90% of model RPM cap). If you're not "
+            f"running a batch, a key may be leaking — rotate immediately."
         )
         _push_alert("critical", "spike", msg, rpm=rpm, window_sec=SPIKE_WINDOW_SEC)
         log.error(f"[QUOTA-ALERT] {msg}")
@@ -183,27 +237,28 @@ def record_request(api_key: str) -> None:
         _recent_request_times.append(time.time())
         _check_rate_spike()
 
-    warn_at = int(DAILY_LIMIT_FREE * WARN_THRESHOLD)
-    crit_at = int(DAILY_LIMIT_FREE * CRITICAL_THRESHOLD)
+    daily_limit = daily_limit_for()
+    warn_at = int(daily_limit * WARN_THRESHOLD)
+    crit_at = int(daily_limit * CRITICAL_THRESHOLD)
 
     if count == warn_at:
         msg = (
             f"Key {kid} hit {WARN_THRESHOLD*100:.0f}% of free-tier daily limit "
-            f"({count}/{DAILY_LIMIT_FREE} req). Reset: {_format_reset()}"
+            f"({count}/{daily_limit} req). Reset: {_format_reset()}"
         )
         log.warning(f"[QUOTA] {msg}")
         _push_alert("warn", "quota_warn", msg, key=kid, count=count)
     elif count == crit_at:
         msg = (
             f"Key {kid} at {CRITICAL_THRESHOLD*100:.0f}% of free-tier limit "
-            f"({count}/{DAILY_LIMIT_FREE}). Only {DAILY_LIMIT_FREE - count} req left. "
+            f"({count}/{daily_limit}). Only {daily_limit - count} req left. "
             f"Reset: {_format_reset()}"
         )
         log.error(f"[QUOTA] {msg}")
         _push_alert("critical", "quota_critical", msg, key=kid, count=count)
-    elif count == DAILY_LIMIT_FREE:
+    elif count == daily_limit:
         msg = (
-            f"Key {kid} reached 100% ({count}/{DAILY_LIMIT_FREE}). "
+            f"Key {kid} reached 100% ({count}/{daily_limit}). "
             f"Next request will likely fail with 429. Reset: {_format_reset()}"
         )
         log.error(f"[QUOTA] {msg}")
@@ -250,7 +305,7 @@ def get_usage_summary() -> dict:
     return {
         "date": today,
         "counts": counts,
-        "limit_per_key": DAILY_LIMIT_FREE,
+        "limit_per_key": daily_limit_for(),
         "reset_at_utc": next_reset.isoformat(),
         "reset_at_local": local.strftime("%H:%M %d/%m/%Y %z"),
         "hours_until_reset": round(_hours_until_reset(), 2),
