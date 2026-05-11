@@ -77,8 +77,12 @@ class TranslateConfig:
     context_window: int = 2           # segments before/after batch for context
     attempts_single_key: int = 6      # retry attempts when only 1 key
     attempts_multi_key: int = 3       # retry attempts per key when multiple
-    retry_delay_single: int = 8       # seconds between retries (single key)
-    retry_delay_multi: int = 5        # seconds between retries (multi key)
+    # Defaults aligned with Gemini's typical retryDelay header (26-30s on
+    # free tier RPM cap). The actual wait is the max(error.retryDelay, default)
+    # — extracted from the 429 body — so this only matters when Google omits
+    # the header (rare). Old default of 5s caused premature retry storms.
+    retry_delay_single: int = 30      # seconds between retries (single key)
+    retry_delay_multi: int = 30       # seconds between retries (multi key)
     error_max_length: int = 280       # compact error message truncation
 
 

@@ -219,6 +219,72 @@ class TestDownloadBatchEndpoint:
         assert r.status_code == 404
         assert "No completed files" in r.json()["error"]
 
+    def test_missing_lang_and_kind(self, client):
+        """Either `lang` or `kind` must be provided."""
+        r = client.get("/api/download-batch?job_ids=abc")
+        assert r.status_code == 400
+        assert "lang" in r.json()["error"] and "kind" in r.json()["error"]
+
+    def test_both_lang_and_kind_rejected(self, client):
+        """Specifying both is ambiguous — must pick exactly one."""
+        r = client.get("/api/download-batch?job_ids=abc&lang=vi&kind=converted")
+        assert r.status_code == 400
+
+    def test_invalid_kind(self, client):
+        r = client.get("/api/download-batch?job_ids=abc&kind=bogus")
+        assert r.status_code == 400
+        assert "Unsupported kind" in r.json()["error"]
+
+    def test_zip_bundles_files_for_kind_converted(self, client):
+        """Convert-only output (no `lang`, has `kind=converted`) bundles via kind=."""
+        import os
+        import zipfile
+        import io
+        from web import worker, routes
+
+        project_uploads = os.path.join(os.path.dirname(os.path.dirname(routes.__file__)), "uploads")
+        os.makedirs(os.path.join(project_uploads, "test_dlbatch_c1"), exist_ok=True)
+        os.makedirs(os.path.join(project_uploads, "test_dlbatch_c2"), exist_ok=True)
+        path_1 = os.path.join(project_uploads, "test_dlbatch_c1", "EN_090501.mp4")
+        path_2 = os.path.join(project_uploads, "test_dlbatch_c2", "EN_090502.mp4")
+        with open(path_1, "wb") as f: f.write(b"vid1")
+        with open(path_2, "wb") as f: f.write(b"vid2")
+
+        try:
+            with worker._jobs_lock:
+                worker.jobs["test_dlbatch_c1"] = {
+                    "id": "test_dlbatch_c1", "status": "done",
+                    "files": [{"name": "EN_090501.mp4", "type": "video",
+                               "label": "Converted (reels 1080×1920)", "kind": "converted"}],
+                }
+                worker.jobs["test_dlbatch_c2"] = {
+                    "id": "test_dlbatch_c2", "status": "done",
+                    "files": [{"name": "EN_090502.mp4", "type": "video",
+                               "label": "Converted (reels 1080×1920)", "kind": "converted"},
+                              {"name": "EN_090502.vi.srt", "type": "srt",  # has lang, must be excluded
+                               "label": "Subtitles (vi)", "lang": "vi"}],
+                }
+
+            r = client.get("/api/download-batch?job_ids=test_dlbatch_c1,test_dlbatch_c2&kind=converted")
+            assert r.status_code == 200
+            assert r.headers["content-type"] == "application/zip"
+            assert "batch-converted.zip" in r.headers["content-disposition"]
+
+            zf = zipfile.ZipFile(io.BytesIO(r.content))
+            names = sorted(zf.namelist())
+            assert names == ["EN_090501.mp4", "EN_090502.mp4"]  # SRT excluded
+            assert zf.read("EN_090501.mp4") == b"vid1"
+        finally:
+            with worker._jobs_lock:
+                worker.jobs.pop("test_dlbatch_c1", None)
+                worker.jobs.pop("test_dlbatch_c2", None)
+            for p in (path_1, path_2):
+                try: os.remove(p)
+                except OSError: pass
+            for d in ("test_dlbatch_c1", "test_dlbatch_c2"):
+                try: os.rmdir(os.path.join(project_uploads, d))
+                except OSError: pass
+
     def test_zip_bundles_files_for_lang(self, client):
         """Happy path: 2 fake completed jobs each with a vi file → ZIP has both,
         en file is excluded. Uses real project uploads dir (cleaned up after)."""

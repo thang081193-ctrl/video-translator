@@ -42,6 +42,11 @@ class PipelineParams:
     platform spec before any other stage. When set, `video_path` is
     mutated in-place to point to the converted file and the original is
     deleted to save disk on Vast.ai.
+
+    `convert_only=True` short-circuits the pipeline after the convert
+    step — produces just the re-encoded video, no transcribe/translate/
+    burn/dub. Requires `convert_preset` to be set; `target_langs` may be
+    empty in this mode.
     """
     video_path: str
     target_langs: list[str] = field(default_factory=list)
@@ -59,9 +64,15 @@ class PipelineParams:
     use_cache: bool = True
     output_dir: str | None = None
     convert_preset: str | None = None
+    convert_only: bool = False
 
     def __post_init__(self):
-        if not self.target_langs:
+        if self.convert_only:
+            if not self.convert_preset:
+                raise ValueError(
+                    "PipelineParams.convert_only=True requires convert_preset to be set"
+                )
+        elif not self.target_langs:
             raise ValueError("PipelineParams.target_langs must contain at least one lang")
         if self.convert_preset is not None:
             from pipeline.convert import PRESETS
@@ -119,6 +130,8 @@ def _per_lang_step_count(params: PipelineParams) -> int:
 
 def count_steps(params: PipelineParams) -> int:
     """Total UI steps for the whole job (shared + per-lang × N langs)."""
+    if params.convert_only:
+        return 1  # just the convert step
     shared = 2  # extract_audio, transcribe
     if params.convert_preset:
         shared += 1  # convert runs once, before extract_audio
@@ -166,6 +179,13 @@ def estimate_eta_seconds(
     (translate, TTS, mix, merge, burn) scales linearly with len(target_langs).
     """
     vd = max(video_duration_sec, 1.0)
+
+    # Convert-only: just the re-encode, nothing else
+    if params.convert_only:
+        total = vd * 0.3
+        if gpu_name is None or not should_use_gpu():
+            total *= 6.0
+        return max(15, int(total))
 
     # Shared: Whisper transcribe + (optional Demucs/convert) — independent of N langs
     shared = vd * 0.35
@@ -254,6 +274,20 @@ def run_pipeline(
         if issues:
             log.warning(f"Convert verify: {'; '.join(issues)}")
         progress_update(f"Converted to {preset.name}", 5)
+
+        # Convert-only: short-circuit before transcribe/translate/burn.
+        if params.convert_only:
+            result.files.append({
+                "name": os.path.basename(target_path),
+                "type": "video",
+                "label": f"Converted ({preset.name} {preset.width}×{preset.height})",
+                "kind": "converted",
+            })
+            try:
+                empty_cuda_cache()
+            except Exception:
+                pass
+            return result
 
     progress("Extracting audio", 5)
     with _stage(result, "extract_audio"):
