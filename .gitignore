@@ -18,6 +18,13 @@ _test_vn_font.py
 uploads/
 worker.log
 server.log
+webapp-*.err.log
+webapp-*.out.log
+.server-runinfo.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+_test_brand_pass/
+test-android-apps-plugin-*.zip
 
 # Build artifacts
 VastAI_Upload.tar.gz

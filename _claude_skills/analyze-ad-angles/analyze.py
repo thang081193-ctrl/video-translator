@@ -353,6 +353,12 @@ class GeminiRotator:
                     self.cool_until[(key, model)] = time.time() + 86400
                     last_err = e
                     continue
+                if "API_KEY_INVALID" in msg or "API key expired" in msg or "API key not valid" in msg:
+                    # Banish ALL models for this key — it's the key, not the model.
+                    for m in self.models:
+                        self.cool_until[(key, m)] = time.time() + 86400
+                    last_err = e
+                    continue
                 if "500" in msg or "503" in msg or "UNAVAILABLE" in msg:
                     time.sleep(min(2 ** attempt, 8))
                     last_err = e

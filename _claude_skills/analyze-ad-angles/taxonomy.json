@@ -1,149 +1,101 @@
 {
   "angles": [
     {
-      "name": "AI Transformation Reveal",
-      "description": "Leverages AI to showcase a dramatic visual change, appealing to curiosity and the desire for transformation.",
+      "name": "Before/After Transformation Reveal",
+      "description": "Highlights the dramatic contrast between a cluttered or empty space and a polished, finished design to prove efficacy.",
       "signal_keywords": [
-        "AI Transformation",
-        "AI Makeover",
-        "AI Style Transformation",
-        "AI Photo Transformation",
-        "Transformation Reveal",
-        "Glow-up Transformation",
-        "Dreamy Transformation",
-        "Aesthetic Transformation"
+        "Before/After Transformation Reveal",
+        "Before/After Room Transformation",
+        "Before/After Room Makeover",
+        "Before/After Room Redesign",
+        "Before/After Home Transformation Reveal",
+        "Before/After Interior Design Transformation",
+        "Before/After Interior Transformation Reveal",
+        "Before/After Backyard Transformation"
       ]
     },
     {
-      "name": "AI Character / Style Creation",
-      "description": "Uses AI to generate artistic or stylized versions of the user, tapping into fantasy and creative expression.",
+      "name": "Instant Home Makeover Reveal",
+      "description": "Focuses on the speed of the transformation, promising an immediate change from an old space to a new one.",
       "signal_keywords": [
-        "AI Art Style",
-        "AI Cartoon Portrait",
-        "AI Character Transformation",
-        "AI Generated Portrait",
-        "Become Anime",
-        "Become Cartoon",
-        "AI Stylized Portrait",
-        "AI Avatar Creation"
+        "Instant Home Makeover Reveal",
+        "Instant Room Makeover Reveal",
+        "Instant Room Makeover Transformation",
+        "Instant Room Redesign Transformation",
+        "Instant Room Transformation Reveal",
+        "Instant Interior Makeover Reveal",
+        "Instant Home Design Transformation",
+        "Instant Home Interior Redesign",
+        "Instant Home Layout Magic",
+        "Instant Interior Design Makeover"
       ]
     },
     {
-      "name": "AI Personal Diagnosis",
-      "description": "Offers personalized AI-driven insights or recommendations for appearance, appealing to self-improvement and curiosity.",
+      "name": "Aspirational Aesthetic Room Makeover",
+      "description": "Targets the user's desire for a high-end, designer-quality living space by showcasing aspirational styles.",
       "signal_keywords": [
-        "AI Hair Style",
-        "AI Makeup Diagnosis",
-        "AI Personal Style",
-        "AI Style Diagnosis",
-        "Personal Style Diagnosis",
-        "Personalized Hairstyle AI",
-        "Personalized Makeup Style"
+        "Aspirational Aesthetic Room Makeover",
+        "Aspirational Home Design Transformation",
+        "Aspirational Room Glow-up Reveal",
+        "Dream Home Transformation Reveal",
+        "Dream Room Transformation Reveal",
+        "Interior Design Style Showcase",
+        "Visualize Dream Home Styles",
+        "Visualize Your Dream Home",
+        "Copy Professional Interior Aesthetics"
       ]
     },
     {
-      "name": "Couple Aesthetic Reveal",
-      "description": "Focuses on romantic or aesthetic pairings, highlighting shared experiences and visual harmony for couples.",
+      "name": "Sketch to 3D Reality Reveal",
+      "description": "Demonstrates the technical capability of turning 2D blueprints or sketches into realistic 3D visualizations.",
       "signal_keywords": [
-        "Couple Aesthetic",
-        "Couple Romance",
-        "Couple Photo Aesthetic",
-        "Couple Transformation",
-        "Couple/Romance Aesthetic",
-        "Romantic Couple Photo",
-        "Doll-like Couple"
+        "Sketch to 3D Reality Reveal",
+        "Floor Plan to 3D Design Reveal",
+        "Floor Plan to 3D Visualization",
+        "Blueprint to Reality Transformation",
+        "2D to 3D Magic Reveal",
+        "Instant 2D to 3D Transformation"
       ]
     },
     {
-      "name": "Before/After Comparison",
-      "description": "Directly shows a stark contrast between two states, emphasizing improvement or change.",
+      "name": "Awkward Space Transformation Reveal",
+      "description": "Focuses on solving specific pain points like cluttered, useless, or awkward spaces to show utility.",
       "signal_keywords": [
-        "Before/After",
-        "Then and Now",
-        "Photo Comparison",
-        "Transformation",
-        "Old Photo Restoration"
+        "Awkward Space Transformation Reveal",
+        "Useless Space Transformation Reveal",
+        "Cluttered to Designer Transformation",
+        "Space Transformation Challenge"
       ]
     },
     {
-      "name": "Viral Trend Template",
-      "description": "Capitalizes on current social media trends by offering easy-to-use templates for recreation.",
+      "name": "AI Garden Design Speed",
+      "description": "Highlights the ease and speed of transforming outdoor spaces and backyards using AI.",
       "signal_keywords": [
-        "Viral Trend",
-        "CapCut Template",
-        "Trend Video Tutorial",
-        "Trend Recreation",
-        "Trend Tutorial",
-        "Photo Template"
+        "AI Garden Design Speed",
+        "Effortless AI Garden Design",
+        "Backyard Garden Transformation Reveal",
+        "Backyard Transformation Reveal"
       ]
     },
     {
-      "name": "Surprise / Shock Reveal",
-      "description": "Builds anticipation for an unexpected or surprising outcome, creating a strong emotional hook.",
+      "name": "Instant Layout Design Promise",
+      "description": "Focuses on the functional promise of generating home layouts and designs instantly.",
       "signal_keywords": [
-        "Surprise Reveal",
-        "Shock Reveal",
-        "Mysterious AI Photo",
-        "Deception Reveal",
-        "Breakout Trend"
-      ]
-    },
-    {
-      "name": "Aspirational Lifestyle Aesthetic",
-      "description": "Presents an idealized or aspirational visual style, appealing to desires for a better life or image.",
-      "signal_keywords": [
-        "Aspirational Aesthetic",
-        "Magazine Cover Star",
-        "AI Generated Celebrity",
-        "AI Studio Portrait",
-        "Aesthetic Portrait"
-      ]
-    },
-    {
-      "name": "AI Art Prompt Showcase",
-      "description": "Highlights the creative potential of AI by showcasing impressive results from specific prompts.",
-      "signal_keywords": [
-        "AI Image Generation Prompt",
-        "AI Art Style Transformation",
-        "AI Generated Portrait Aesthetic"
-      ]
-    },
-    {
-      "name": "Try-On / Design Preview",
-      "description": "Allows users to virtually try on or preview styles like tattoos or hairstyles before committing.",
-      "signal_keywords": [
-        "AI Tattoo Design",
-        "Temporary Tattoo",
-        "Try On Tattoo",
-        "Hairstyle Makeover Try-On",
-        "Wedding Photo Template Try-On"
-      ]
-    },
-    {
-      "name": "Age Progression Reveal",
-      "description": "Shows how a person might look in the future, playing on curiosity about aging and time.",
-      "signal_keywords": [
-        "Age Progression Reveal",
-        "Past Self Future Self"
-      ]
-    },
-    {
-      "name": "AI Trend Match",
-      "description": "Applies AI to match users with current aesthetic trends, offering a sense of belonging and style.",
-      "signal_keywords": [
-        "AI Trend Video",
-        "Become Korean AI Trend",
-        "AI Photo Template Match"
-      ]
-    },
-    {
-      "name": "Special Occasion Transformation",
-      "description": "Focuses on transformations related to significant life events like weddings or pregnancies.",
-      "signal_keywords": [
-        "Wedding Photo Transformation",
-        "Pregnancy Reveal Transformation"
+        "Instant Layout Design Promise",
+        "Instant AI Home Layout Generator",
+        "AI Home Layout Transformation",
+        "AI Home Design Reveal",
+        "AI Home Design Transformation",
+        "AI Interior Design Transformation",
+        "AI Instant Home Makeover",
+        "AI Instant Home Redecoration",
+        "AI Room Makeover",
+        "3-Second AI Room Makeover",
+        "Designer Cost vs AI Speed",
+        "Instant Dream Home Reveal",
+        "Instant Home Design Visualization"
       ]
     }
   ],
-  "generated_at": "2026-05-12T17:00:40"
+  "generated_at": "2026-05-13T11:49:46"
 }
