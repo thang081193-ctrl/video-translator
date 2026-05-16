@@ -337,13 +337,16 @@ def brand_pass_video(
             raise RuntimeError(f"ffmpeg mix failed (exit {r.returncode}): {r.stderr[-800:]}")
 
         # 6. Video transforms (zoom + color + watermark)
+        # force_original_aspect_ratio=increase: scale to make BOTH dims >= target
+        # while preserving source aspect — kills baked-in pillar bars on non-9:16
+        # sources (16:9 landscape, 4:5 portrait). Center crop with jitter via
+        # in_w/in_h expressions resolves at filter time, not Python time.
         scaled_w = int(W * p["zoom"])
         scaled_h = int(H * p["zoom"])
-        cx = (scaled_w - W) // 2 + p["crop_dx"]
-        cy = (scaled_h - H) // 2 + p["crop_dy"]
-        cx = max(0, min(scaled_w - W, cx))
-        cy = max(0, min(scaled_h - H, cy))
-        zoom_crop = f"scale={scaled_w}:{scaled_h},crop={W}:{H}:{cx}:{cy}"
+        zoom_crop = (
+            f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
+            f"crop={W}:{H}:(in_w-{W})/2+({p['crop_dx']}):(in_h-{H})/2+({p['crop_dy']})"
+        )
         color = (
             f"eq=saturation={p['saturation']}:contrast={p['contrast']}:gamma={p['gamma']},"
             f"hue=h={p['hue']}"
