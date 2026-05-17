@@ -24,6 +24,7 @@ from pipeline.brand_pass import brand_pass_video
 SRC_ROOT = Path(r"D:/Dev/App Details/Artify Gen/Video/1605/FANCAM")
 DST_ROOT = Path(r"D:/Dev/App Details/Artify Gen/Video/1605/_branded/FANCAM")
 LOGO     = Path(r"D:/Dev/App Details/Artify Gen/Logo.png")
+BRAND_BG = Path(r"D:/Dev/App Details/Artify Gen/brand_bg_1080x1920.png")
 BRAND_TITLE = "Artify Gen"
 BRAND_SUB   = "AI Photo Studio"
 
@@ -47,6 +48,7 @@ def process_one(args):
             outro_title=BRAND_TITLE,
             outro_subtitle=BRAND_SUB,
             trim_endcard=True,
+            pad_bg_image=str(BRAND_BG),
             random_seed=seed,
         )
         return ("ok", src.name, time.time() - t0, "")
