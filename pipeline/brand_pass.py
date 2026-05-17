@@ -117,6 +117,75 @@ def _ffprobe_duration(path: str) -> float:
     return float(r.stdout.strip())
 
 
+def _ffprobe_dims(path: str) -> tuple[int, int]:
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+        capture_output=True, text=True, check=True,
+    )
+    w, h = r.stdout.strip().split(",")
+    return int(w), int(h)
+
+
+def _is_target_aspect(w: int, h: int, target_w: int = W, target_h: int = H, tol: float = 0.05) -> bool:
+    """True if source aspect is within tol of target (default ±5% of 9:16)."""
+    return abs((w / h) - (target_w / target_h)) <= tol
+
+
+def _compute_pad_layout(src_w: int, src_h: int) -> dict:
+    """Compute visible bands when scaling source fit-within 1080x1920.
+
+    Returns disp_w/disp_h (rendered video size), top_h/bot_h (visible
+    pad bands above/below the video), side_w (visible pad bands left/right).
+    Used to fit brand elements (logo top, text bottom) without overlap.
+    """
+    scale = min(W / src_w, H / src_h)
+    disp_w = int(src_w * scale)
+    disp_h = int(src_h * scale)
+    # Force even dims (libx264 requirement when overlay positions matter)
+    disp_w -= disp_w % 2
+    disp_h -= disp_h % 2
+    top_h = (H - disp_h) // 2
+    bot_h = H - disp_h - top_h
+    side_w = (W - disp_w) // 2
+    return {
+        "disp_w": disp_w, "disp_h": disp_h,
+        "top_h": top_h, "bot_h": bot_h, "side_w": side_w,
+    }
+
+
+def _detect_content_crop(video_path: str, src_w: int, src_h: int,
+                         limit: int = 40) -> tuple[int, int, int, int] | None:
+    """Detect baked-in black/dark bars via ffmpeg cropdetect.
+
+    Samples ~60 frames after t=1s with intensity threshold `limit` (default 40
+    catches dark-grey bars like #1a1a1a / #2a2a2a — pure-black-only default 24
+    misses these). Returns (W, H, X, Y) content region, or None if no
+    significant bars detected (content fills source within ±8px slop).
+    """
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-ss", "1", "-i", video_path,
+             "-vf", f"cropdetect={limit}:16:0",
+             "-frames:v", "60", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=60,
+        )
+        crops = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", r.stderr)
+        if not crops:
+            return None
+        cw, ch, cx, cy = map(int, crops[-1])
+        # If detected crop is essentially full frame (±8px slop), no bars
+        if cw >= src_w - 8 and ch >= src_h - 8:
+            return None
+        # Skip if detected crop is absurdly small (cropdetect false alarm)
+        if cw < src_w // 4 or ch < src_h // 4:
+            return None
+        return (cw, ch, cx, cy)
+    except Exception as e:
+        log.warning(f"cropdetect failed: {e}")
+        return None
+
+
 def _detect_endcard_start(video_path: str, src_dur: float,
                           min_drop_pct: float = 0.7,
                           min_tail_s: float = 1.5) -> float | None:
@@ -227,6 +296,7 @@ def brand_pass_video(
     bgm_volume: float | None = None,
     trim_endcard: bool = False,
     trim_endcard_min_drop_pct: float = 0.7,
+    pad_bg_image: str | None = None,
     work_root: str | None = None,
     random_seed: int | None = None,
 ) -> str:
@@ -254,6 +324,8 @@ def brand_pass_video(
         raise FileNotFoundError(f"watermark_image: {watermark_image}")
     if outro_logo_image and not os.path.isfile(outro_logo_image):
         raise FileNotFoundError(f"outro_logo_image: {outro_logo_image}")
+    if pad_bg_image and not os.path.isfile(pad_bg_image):
+        raise FileNotFoundError(f"pad_bg_image: {pad_bg_image}")
     os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
 
     p = _build_jittered_params(random_seed)
@@ -336,44 +408,159 @@ def brand_pass_video(
         if r.returncode != 0:
             raise RuntimeError(f"ffmpeg mix failed (exit {r.returncode}): {r.stderr[-800:]}")
 
-        # 6. Video transforms (zoom + color + watermark)
-        # force_original_aspect_ratio=increase: scale to make BOTH dims >= target
-        # while preserving source aspect — kills baked-in pillar bars on non-9:16
-        # sources (16:9 landscape, 4:5 portrait). Center crop with jitter via
-        # in_w/in_h expressions resolves at filter time, not Python time.
-        scaled_w = int(W * p["zoom"])
-        scaled_h = int(H * p["zoom"])
-        zoom_crop = (
-            f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
-            f"crop={W}:{H}:(in_w-{W})/2+({p['crop_dx']}):(in_h-{H})/2+({p['crop_dy']})"
-        )
+        # 6. Video transforms (aspect-aware)
+        # Branch 6a (source IS 9:16): zoom 1.04x + crop with jitter — old behavior
+        # Branch 6b (source NOT 9:16): scale-fit-within (zero crop) + overlay on
+        #            pad_bg_image (brand background PNG) — preserves 100% content
+        src_w, src_h = _ffprobe_dims(working_input)
+        is_target = _is_target_aspect(src_w, src_h)
+        log.info(f"Source aspect: {src_w}x{src_h}  is_9:16={is_target}  pad_bg={'yes' if pad_bg_image else 'no'}")
+
         color = (
             f"eq=saturation={p['saturation']}:contrast={p['contrast']}:gamma={p['gamma']},"
             f"hue=h={p['hue']}"
         )
 
+        if is_target:
+            # === Branch 6a: zoom + crop (jittered) ===
+            scaled_w = int(W * p["zoom"])
+            scaled_h = int(H * p["zoom"])
+            zoom_crop = (
+                f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
+                f"crop={W}:{H}:(in_w-{W})/2+({p['crop_dx']}):(in_h-{H})/2+({p['crop_dy']})"
+            )
+            bg_filter = f"{zoom_crop},{color}"
+            bg_inputs = ["-i", working_input]
+            bg_label = "[0:v]"
+            n_bg_inputs = 1
+        else:
+            # === Branch 6b: scale-fit-within + dynamic-compose brand pad ===
+            # 1. Strip baked-in dark bars via cropdetect (content, not padding)
+            # 2. Compute display layout: visible top/bottom band sizes
+            # 3. Compose dynamic pad bg:
+            #    - base gradient (lavfi) OR pad_bg_image PNG
+            #    - logo overlay sized to fit top band (centered)
+            #    - title + subtitle text drawn into bottom band (centered)
+            # 4. Overlay scaled source video at center
+            # Result: brand elements ALWAYS visible, never cut by source.
+            crop_region = _detect_content_crop(working_input, src_w, src_h)
+            if crop_region:
+                cw, ch, cx, cy = crop_region
+                pre_crop = f"crop={cw}:{ch}:{cx}:{cy},"
+                content_w, content_h = cw, ch
+                log.info(f"Auto-strip baked bars: {src_w}x{src_h} → {cw}x{ch} at ({cx},{cy})")
+            else:
+                pre_crop = ""
+                content_w, content_h = src_w, src_h
+
+            layout = _compute_pad_layout(content_w, content_h)
+            disp_w, disp_h = layout["disp_w"], layout["disp_h"]
+            top_h, bot_h = layout["top_h"], layout["bot_h"]
+            log.info(f"Pad layout: disp={disp_w}x{disp_h}  top_band={top_h}px  bot_band={bot_h}px")
+
+            # Logo size in top band — 60% of band height, capped at 280px, min 80px
+            pad_logo_size = max(80, min(int(top_h * 0.6), 280))
+            pad_logo_y = (top_h - pad_logo_size) // 2  # centered in top band
+
+            # Text sizes — fit within bottom band height
+            pad_title_fs = max(28, min(int(bot_h * 0.30), 96))
+            pad_sub_fs   = max(18, min(int(bot_h * 0.16), 44))
+            # Stack title + sub centered vertically in bot band
+            text_gap = 16
+            text_total_h = pad_title_fs + text_gap + pad_sub_fs
+            text_start_y = disp_h + top_h + (bot_h - text_total_h) // 2
+            pad_title_y = text_start_y
+            pad_sub_y = text_start_y + pad_title_fs + text_gap
+
+            # Choose base bg: static PNG if given, else lavfi gradient
+            if pad_bg_image:
+                base_filter = f"[1:v]scale={W}:{H},setsar=1"
+                base_inputs = ["-loop", "1", "-framerate", "30", "-i", pad_bg_image]
+            else:
+                base_filter = "[1:v]scale={W}:{H},setsar=1".format(W=W, H=H)
+                base_inputs = ["-f", "lavfi", "-i",
+                    f"gradients=s={W}x{H}:c0=0x1E1B4B:c1=0x5B21B6:type=linear:duration=999:speed=0"]
+
+            # Logo input (uses outro_logo_image if available, else watermark_image)
+            # When pad_bg_image is provided, assume PNG already has brand elements
+            # baked in safe zones — skip dynamic logo+text to avoid duplicates.
+            pad_logo_src = outro_logo_image or watermark_image
+            has_pad_logo = (
+                bool(pad_logo_src) and top_h >= 100 and not pad_bg_image
+            )
+            has_pad_text = bot_h >= 100 and not pad_bg_image
+
+            # Build filter graph incrementally
+            chunks = [f"{base_filter}[bg0]"]
+            current_label = "bg0"
+
+            if has_pad_logo:
+                logo_idx = 2  # input index for pad logo
+                chunks.append(
+                    f"[{logo_idx}:v]scale={pad_logo_size}:{pad_logo_size},"
+                    f"format=rgba,colorchannelmixer=aa=0.95[padlogo]"
+                )
+                chunks.append(
+                    f"[{current_label}][padlogo]overlay=(W-w)/2:{pad_logo_y}[bg1]"
+                )
+                current_label = "bg1"
+
+            if has_pad_text:
+                title_filter = (
+                    f"drawtext=fontfile='{FONT_FF}':text='{outro_title}':"
+                    f"fontsize={pad_title_fs}:fontcolor=white:"
+                    f"x=(w-text_w)/2:y={pad_title_y}"
+                )
+                sub_filter = (
+                    f"drawtext=fontfile='{FONT_FF}':text='{outro_subtitle}':"
+                    f"fontsize={pad_sub_fs}:fontcolor=0xA78BFA:"
+                    f"x=(w-text_w)/2:y={pad_sub_y}"
+                )
+                chunks.append(f"[{current_label}]{title_filter},{sub_filter}[bg2]")
+                current_label = "bg2"
+
+            # Source video: pre-crop bars → scale-fit-within → color LUT
+            chunks.append(
+                f"[0:v]{pre_crop}scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                f"setsar=1,{color}[fg]"
+            )
+            chunks.append(
+                f"[{current_label}][fg]overlay=(W-w)/2:(H-h)/2:shortest=1"
+            )
+
+            bg_filter = ";".join(chunks)
+            bg_inputs = ["-i", working_input] + base_inputs
+            n_bg_inputs = 2  # source + base
+            if has_pad_logo:
+                bg_inputs += ["-loop", "1", "-framerate", "30", "-i", pad_logo_src]
+                n_bg_inputs = 3
+            bg_label = ""
+
         body = os.path.join(work, "body.mp4")
-        log.info("Encoding transformed body (zoom + color + watermark) ...")
+        log.info("Encoding transformed body (zoom/pad + color + watermark) ...")
         if watermark_image:
-            # PNG overlay watermark
             wm_x = W - SIDE_SAFE - watermark_size + p["wm_dx"]
             wm_y = TOP_SAFE + 20 + p["wm_dy"]
             wm_x = max(0, min(W - watermark_size, wm_x))
             wm_y = max(0, min(H - watermark_size, wm_y))
+            # Watermark image is appended at the next input index after bg inputs
+            wm_idx = n_bg_inputs
             filter_complex = (
-                f"[0:v]{zoom_crop},{color}[bg];"
-                f"[1:v]scale={watermark_size}:{watermark_size},format=rgba,"
+                f"{bg_label}{bg_filter}[bg];"
+                f"[{wm_idx}:v]scale={watermark_size}:{watermark_size},format=rgba,"
                 f"colorchannelmixer=aa={p['wm_opacity']}[wm];"
                 f"[bg][wm]overlay={wm_x}:{wm_y}[vout]"
             )
+            wm_inputs = ["-i", watermark_image]
             subprocess.run(
-                ["ffmpeg", "-y", "-i", working_input, "-i", watermark_image,
-                 "-filter_complex", filter_complex, "-map", "[vout]",
-                 "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]), "-an", body],
+                ["ffmpeg", "-y"] + bg_inputs + wm_inputs +
+                ["-filter_complex", filter_complex, "-map", "[vout]",
+                 "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
+                 "-an", "-shortest", body],
                 capture_output=True, check=True, text=True,
             )
         else:
-            # drawtext watermark (legacy)
+            # drawtext watermark (legacy text-based)
             wm_x = W - SIDE_SAFE - 140 + p["wm_dx"]
             wm_y = TOP_SAFE + 20 + p["wm_dy"]
             drawtext_wm = (
@@ -381,12 +568,25 @@ def brand_pass_video(
                 f"fontsize=36:fontcolor=white@{p['wm_opacity']}:borderw=2:bordercolor=black@0.4:"
                 f"x={wm_x}:y={wm_y}"
             )
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", working_input,
-                 "-vf", f"{zoom_crop},{color},{drawtext_wm}",
-                 "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]), "-an", body],
-                capture_output=True, check=True, text=True,
-            )
+            if is_target:
+                # Branch 6a: single input, simple -vf
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", working_input,
+                     "-vf", f"{bg_filter},{drawtext_wm}",
+                     "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
+                     "-an", body],
+                    capture_output=True, check=True, text=True,
+                )
+            else:
+                # Branch 6b: multi-input filter_complex with drawtext_wm appended
+                filter_complex = f"{bg_filter},{drawtext_wm}[vout]"
+                subprocess.run(
+                    ["ffmpeg", "-y"] + bg_inputs +
+                    ["-filter_complex", filter_complex, "-map", "[vout]",
+                     "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
+                     "-an", "-shortest", body],
+                    capture_output=True, check=True, text=True,
+                )
 
         # 7. Outro card
         outro = os.path.join(work, "outro.mp4")
