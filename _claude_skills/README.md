@@ -11,6 +11,7 @@ Custom skills built for processing Meta Ads Library videos for performance-marke
 | [rename-videos-by-language-date](rename-videos-by-language-date) | Rename mp4 files to `<LANG>_<DDMM><NN>.mp4` (e.g. `FR_120501.mp4`) |
 | [analyze-ad-angles](analyze-ad-angles) | Cluster videos into creative angles via Whisper + Gemini multimodal; outputs CSVs and maintains a daily-stable taxonomy |
 | [super-saiyan-translate](super-saiyan-translate) | High-quality two-phase translation: extract transcripts → human/LLM-translate in chat → dub with original BGM. Bypasses the project's auto-translate for better ad-hook fidelity |
+| [brand-pass](brand-pass) | V4c Reels 1080×1920 brand-pass with Andromeda dedup evasion: side-blur strip, max-content layout, voice gate (avg_logprob), audio passthrough, royalty-free BGM pool by cluster. See [HANDOFF-text-reburn.md](brand-pass/HANDOFF-text-reburn.md) for the next phase. |
 
 ## Dependencies
 - The Video Translator project at `D:\Dev\Tools\Video Translator` (or wherever cloned) provides the `.venv` Python + ffmpeg / faster-whisper / Demucs.
