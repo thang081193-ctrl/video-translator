@@ -73,7 +73,7 @@ SAFE_JITTER = {
     "wm_opacity":   (0.55, 0.65),
     "wm_dx":        (-30, 30),
     "wm_dy":        (-15, 15),
-    "bgm_vol":      (0.35, 0.45),
+    "bgm_vol":      (0.65, 0.80),
     "tts_rate_pct": (-3, 3),
     "outro_dur":    (1.3, 1.7),
     "outro_bg":     ["0x151515", "0x1a1a1a", "0x1f1f1f", "0x222222"],
@@ -152,6 +152,111 @@ def _compute_pad_layout(src_w: int, src_h: int) -> dict:
         "disp_w": disp_w, "disp_h": disp_h,
         "top_h": top_h, "bot_h": bot_h, "side_w": side_w,
     }
+
+
+def _detect_side_blur(video_path: str, src_w: int, src_h: int,
+                      n_frames: int = 5) -> tuple[int, int] | None:
+    """Detect baked-in side-blur padding via per-column edge density.
+
+    Many ad sources are originally 1:1 or narrower content that was padded
+    to 9:16 / 4:5 by adding a BLURRED extension of the same content on
+    left+right sides. ffmpeg cropdetect only catches dark/solid bars and
+    misses this pattern entirely. This detector samples N frames evenly,
+    computes per-column Sobel-x energy (vertical-edge density), and finds
+    the horizontal range where sharp content lives.
+
+    Returns (content_x, content_w) or None if no significant side-blur
+    detected (sharp content already spans ≥92% of source width).
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        log.warning("cv2/numpy not available; skipping side-blur detection")
+        return None
+    try:
+        # Sample frames evenly between 15% and 85% of duration
+        dur = _ffprobe_duration(video_path)
+        densities_list = []
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(n_frames):
+                t = dur * (0.15 + 0.70 * i / max(n_frames - 1, 1))
+                fpath = os.path.join(tmp, f"f{i}.png")
+                r = subprocess.run(
+                    ["ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", video_path,
+                     "-frames:v", "1", fpath],
+                    capture_output=True, timeout=30,
+                )
+                if r.returncode != 0 or not os.path.isfile(fpath):
+                    continue
+                gray = cv2.imread(fpath, cv2.IMREAD_GRAYSCALE)
+                if gray is None:
+                    continue
+                sx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+                densities_list.append(np.abs(sx).mean(axis=0))
+        if not densities_list:
+            return None
+        densities = np.mean(densities_list, axis=0)
+        # Smooth to ignore single-column spikes
+        win = max(5, src_w // 100)
+        smooth = np.convolve(densities, np.ones(win) / win, mode="same")
+        threshold = smooth.max() * 0.30
+        above = smooth > threshold
+        if not above.any():
+            return None
+        left = int(np.argmax(above))
+        right = int(len(smooth) - np.argmax(above[::-1]))
+        content_w = right - left
+        # No significant side-blur if sharp region spans ≥92% of source width
+        if content_w >= src_w * 0.92:
+            return None
+        # Reject absurdly narrow detection (<25% width = false positive)
+        if content_w < src_w * 0.25:
+            return None
+
+        # Laplacian-variance verification — real blur has very low pixel
+        # variation (smoothed), natural low-detail content (dark sky, walls)
+        # has higher variation. Without this check, EN_2405_01 (native 9:16
+        # with dark sides but sharp content) falsely fired detection at 74%
+        # width. Sample one mid-video frame, compute Lap variance per region.
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                fpath = os.path.join(tmp, "verify.png")
+                t_mid = dur * 0.5
+                r2 = subprocess.run(
+                    ["ffmpeg", "-y", "-ss", f"{t_mid:.2f}", "-i", video_path,
+                     "-frames:v", "1", fpath],
+                    capture_output=True, timeout=20,
+                )
+                if r2.returncode == 0 and os.path.isfile(fpath):
+                    gray = cv2.imread(fpath, cv2.IMREAD_GRAYSCALE)
+                    if gray is not None and left > 8 and right < src_w - 8:
+                        side_left = gray[:, :left]
+                        center = gray[:, left:right]
+                        if side_left.size > 0 and center.size > 0:
+                            side_var = cv2.Laplacian(side_left, cv2.CV_64F).var()
+                            center_var = cv2.Laplacian(center, cv2.CV_64F).var()
+                            # If sides are not significantly blurrier than
+                            # center, this is false positive (natural low-
+                            # detail, not baked-in blur).
+                            if center_var <= 1.0 or (side_var / center_var) > 0.40:
+                                log.info(
+                                    f"side-blur verify FAIL: side_lap={side_var:.1f} "
+                                    f"center_lap={center_var:.1f} ratio="
+                                    f"{(side_var/max(center_var,1e-9)):.2f} (need ≤0.40)"
+                                )
+                                return None
+        except Exception as e:
+            log.warning(f"side-blur Laplacian verify failed: {e}")
+            # Fall through — trust the edge-density detection alone
+
+        # Snap to even pixels (libx264 requirement)
+        left -= left % 2
+        content_w -= content_w % 2
+        return left, content_w
+    except Exception as e:
+        log.warning(f"side-blur detection failed: {e}")
+        return None
 
 
 def _detect_content_crop(video_path: str, src_w: int, src_h: int,
@@ -268,12 +373,64 @@ def _build_jittered_params(seed: int | None) -> dict:
 
 
 def _transcribe_video(video_path: str, work_root: str | None = None) -> str:
-    """Extract audio + Whisper transcribe → return joined transcript text."""
+    """Extract audio + Whisper transcribe with non-speech gating.
+
+    Returns "" (empty) when the source is music-only / no real speech so the
+    caller can substitute a silent placeholder and keep the original BGM instead
+    of TTS-reading Whisper's hallucinations on lyrics or music.
+
+    Gate rules (per faster-whisper segment):
+      - drop segments with empty text
+      - drop segments with avg_logprob <= -0.5 (rejects hallucinations like
+        "Thank you.", "Jimmy is buying" — Whisper invents low-confidence text
+        when run on music-only audio with language="en" forced)
+      - if remaining speech duration < max(1.5s, 5% of video) → music-only
+
+    Why this threshold:
+      Empirical on this project's ad sources — music-only hallucinations have
+      logp in [-1.0, -0.7]; real brief hooks like "What doesn't kill you?"
+      have logp ≥ -0.3. The -0.5 split is well clear of both clusters.
+      no_speech_prob is NOT used: it fires high (~0.7+) on ALL music-dominant
+      content including real short hooks, so it's unreliable as a per-segment
+      filter.
+    """
     work = tempfile.mkdtemp(prefix="brandpass_tx_", dir=work_root) if work_root else tempfile.mkdtemp(prefix="brandpass_tx_")
     try:
         audio = extract_audio(video_path, work)
-        segments, _ = transcribe(audio, model_name="small", source_lang="en", use_cache=False)
-        text = " ".join(s["text"].strip() for s in segments).strip()
+        video_dur = _ffprobe_duration(video_path)
+        # Use raw WhisperModel directly to access no_speech_prob + avg_logprob
+        # (the project transcribe() drops these fields). _get_model reuses the
+        # process-wide LRU cache so we don't re-load `small` per call.
+        from pipeline.transcribe import _get_model
+        model = _get_model("small")
+        try:
+            raw_segments, _info = model.transcribe(
+                audio, language="en", vad_filter=True, beam_size=1,
+            )
+            seg_list = list(raw_segments)
+        except Exception as e:
+            log.warning(f"GPU transcribe failed ({e}); falling back to CPU")
+            from pipeline.transcribe import _fallback_to_cpu
+            model = _fallback_to_cpu("small")
+            raw_segments, _info = model.transcribe(
+                audio, language="en", vad_filter=True, beam_size=1,
+            )
+            seg_list = list(raw_segments)
+
+        real = [s for s in seg_list if s.text.strip() and s.avg_logprob > -0.5]
+        speech_dur = sum(s.end - s.start for s in real)
+        min_speech = max(1.5, video_dur * 0.05)
+        if speech_dur < min_speech:
+            log.info(
+                f"No real speech: kept {len(real)}/{len(seg_list)} segs, "
+                f"speech={speech_dur:.1f}s < gate={min_speech:.1f}s — treating as music-only"
+            )
+            return ""
+        text = " ".join(s.text.strip() for s in real).strip()
+        log.info(
+            f"Real speech detected: {len(real)}/{len(seg_list)} segs, "
+            f"{speech_dur:.1f}s, transcript={len(text)}ch"
+        )
         return text
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -297,6 +454,7 @@ def brand_pass_video(
     trim_endcard: bool = False,
     trim_endcard_min_drop_pct: float = 0.7,
     pad_bg_image: str | None = None,
+    bgm_replace_path: str | None = None,
     work_root: str | None = None,
     random_seed: int | None = None,
 ) -> str:
@@ -379,42 +537,88 @@ def brand_pass_video(
         from pipeline.audio import extract_audio_hq
         src_audio = extract_audio_hq(working_input, src_audio_dir)
 
-        # 3. Demucs separate
-        log.info("Demucs htdemucs separating BGM ...")
-        demucs_dir = os.path.join(work, "demucs")
-        os.makedirs(demucs_dir, exist_ok=True)
-        stems = separate_audio(src_audio, demucs_dir, model="htdemucs")
-        bgm = stems["no_vocals"]
-
-        # 4. TTS
-        rate_str = f"{p['tts_rate_pct']:+d}%"
-        log.info(f"TTS Edge ({p['voice']}, rate={rate_str}) ...")
-        tts_audio = os.path.join(work, "tts.mp3")
-        asyncio.run(_generate_tts(transcript, p["voice"], tts_audio, rate=rate_str))
-
-        # 5. Mix TTS + BGM
         total_dur = working_dur + p["outro_dur"]
         mixed_audio = os.path.join(work, "mixed.m4a")
-        log.info(f"Mixing TTS over BGM (BGM vol={p['bgm_vol']}) → {total_dur:.2f}s ...")
-        r = subprocess.run(
-            ["ffmpeg", "-y", "-i", tts_audio, "-i", bgm,
-             "-filter_complex",
-             f"[0:a]volume=1.0,apad[v0];"
-             f"[1:a]volume={p['bgm_vol']},apad[v1];"
-             f"[v0][v1]amix=inputs=2:duration=first:dropout_transition=0,atrim=duration={total_dur}[aout]",
-             "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", mixed_audio],
-            capture_output=True, text=True,
-        )
-        if r.returncode != 0:
-            raise RuntimeError(f"ffmpeg mix failed (exit {r.returncode}): {r.stderr[-800:]}")
+        has_voice = bool(transcript and transcript.strip())
 
-        # 6. Video transforms (aspect-aware)
-        # Branch 6a (source IS 9:16): zoom 1.04x + crop with jitter — old behavior
-        # Branch 6b (source NOT 9:16): scale-fit-within (zero crop) + overlay on
-        #            pad_bg_image (brand background PNG) — preserves 100% content
+        # Pick BGM source: replacement track > Demucs-separated > raw source
+        if bgm_replace_path:
+            bgm = bgm_replace_path
+            log.info(f"BGM: replacement={os.path.basename(bgm)} (skip Demucs)")
+        elif has_voice:
+            log.info("Demucs htdemucs separating BGM ...")
+            demucs_dir = os.path.join(work, "demucs")
+            os.makedirs(demucs_dir, exist_ok=True)
+            stems = separate_audio(src_audio, demucs_dir, model="htdemucs")
+            bgm = stems["no_vocals"]
+        else:
+            bgm = src_audio  # passthrough — no separation needed
+
+        if has_voice:
+            # VOICE PATH: TTS over BGM (ducked), bgm loops to cover full duration
+            rate_str = f"{p['tts_rate_pct']:+d}%"
+            tts_audio = os.path.join(work, "tts.mp3")
+            log.info(f"TTS Edge ({p['voice']}, rate={rate_str}) ...")
+            asyncio.run(_generate_tts(transcript, p["voice"], tts_audio, rate=rate_str))
+
+            log.info(f"Mixing TTS over BGM (BGM vol={p['bgm_vol']}) → {total_dur:.2f}s ...")
+            r = subprocess.run(
+                ["ffmpeg", "-y",
+                 "-stream_loop", "-1", "-i", bgm,
+                 "-i", tts_audio,
+                 "-filter_complex",
+                 f"[1:a]volume=1.0,apad[v0];"
+                 f"[0:a]volume={p['bgm_vol']},apad[v1];"
+                 f"[v0][v1]amix=inputs=2:duration=first:dropout_transition=0,atrim=duration={total_dur}[aout]",
+                 "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", mixed_audio],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                raise RuntimeError(f"ffmpeg mix failed (exit {r.returncode}): {r.stderr[-800:]}")
+        else:
+            # MUSIC-ONLY PATH: BGM @ 100% vol, looped/padded to total_dur.
+            # If bgm_replace_path is set, this is the new track. Otherwise
+            # the source's original mix is passed through as-is.
+            log.info(f"Music-only: {os.path.basename(bgm)} @ 100% vol → {total_dur:.2f}s")
+            r = subprocess.run(
+                ["ffmpeg", "-y",
+                 "-stream_loop", "-1", "-i", bgm,
+                 "-af", f"apad=whole_dur={total_dur:.3f}",
+                 "-t", f"{total_dur:.3f}",
+                 "-c:a", "aac", "-b:a", "192k", mixed_audio],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                raise RuntimeError(f"ffmpeg audio failed (exit {r.returncode}): {r.stderr[-800:]}")
+
+        # 6. Video transforms (side-blur aware, aspect-aware)
+        # Order: detect baked padding first → compute EFFECTIVE aspect on real
+        # content → branch on that. Sources that are 9:16 on disk but contain
+        # baked-in side blur (a narrower original padded with blurred edges)
+        # have effective aspect closer to 1:1 / 4:5 once stripped, and many
+        # 4:5 / 1:1 sources are actually 9:16 content after stripping.
         src_w, src_h = _ffprobe_dims(working_input)
-        is_target = _is_target_aspect(src_w, src_h)
-        log.info(f"Source aspect: {src_w}x{src_h}  is_9:16={is_target}  pad_bg={'yes' if pad_bg_image else 'no'}")
+
+        side_blur = _detect_side_blur(working_input, src_w, src_h)
+        if side_blur:
+            sb_x, sb_w = side_blur
+            pre_crop = f"crop={sb_w}:{src_h}:{sb_x}:0,"
+            eff_w, eff_h = sb_w, src_h
+            log.info(f"Side-blur stripped: {src_w}x{src_h} → {sb_w}x{src_h} at x={sb_x}")
+        else:
+            crop_region = _detect_content_crop(working_input, src_w, src_h)
+            if crop_region:
+                cw, ch, cx, cy = crop_region
+                pre_crop = f"crop={cw}:{ch}:{cx}:{cy},"
+                eff_w, eff_h = cw, ch
+                log.info(f"Auto-strip baked bars: {src_w}x{src_h} → {cw}x{ch} at ({cx},{cy})")
+            else:
+                pre_crop = ""
+                eff_w, eff_h = src_w, src_h
+
+        is_target = _is_target_aspect(eff_w, eff_h)
+        log.info(f"Effective aspect: {eff_w}x{eff_h}  is_9:16={is_target}  "
+                 f"pad_bg={'yes' if pad_bg_image else 'no'}")
 
         color = (
             f"eq=saturation={p['saturation']}:contrast={p['contrast']}:gamma={p['gamma']},"
@@ -422,10 +626,11 @@ def brand_pass_video(
         )
 
         if is_target:
-            # === Branch 6a: zoom + crop (jittered) ===
+            # === Branch 6a: pre-crop (if any) → zoom + crop (jittered) ===
             scaled_w = int(W * p["zoom"])
             scaled_h = int(H * p["zoom"])
             zoom_crop = (
+                f"{pre_crop}"
                 f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
                 f"crop={W}:{H}:(in_w-{W})/2+({p['crop_dx']}):(in_h-{H})/2+({p['crop_dy']})"
             )
@@ -434,106 +639,35 @@ def brand_pass_video(
             bg_label = "[0:v]"
             n_bg_inputs = 1
         else:
-            # === Branch 6b: scale-fit-within + dynamic-compose brand pad ===
-            # 1. Strip baked-in dark bars via cropdetect (content, not padding)
-            # 2. Compute display layout: visible top/bottom band sizes
-            # 3. Compose dynamic pad bg:
-            #    - base gradient (lavfi) OR pad_bg_image PNG
-            #    - logo overlay sized to fit top band (centered)
-            #    - title + subtitle text drawn into bottom band (centered)
-            # 4. Overlay scaled source video at center
-            # Result: brand elements ALWAYS visible, never cut by source.
-            crop_region = _detect_content_crop(working_input, src_w, src_h)
-            if crop_region:
-                cw, ch, cx, cy = crop_region
-                pre_crop = f"crop={cw}:{ch}:{cx}:{cy},"
-                content_w, content_h = cw, ch
-                log.info(f"Auto-strip baked bars: {src_w}x{src_h} → {cw}x{ch} at ({cx},{cy})")
-            else:
-                pre_crop = ""
-                content_w, content_h = src_w, src_h
+            # === Branch 6b: blur-pad bg + fit-within content (max content) ===
+            # pre_crop was computed above (side-blur or dark-bar strip).
+            # Background = scaled-COVER + cropped + boxblur (modern Reels look).
+            # Foreground = scaled fit-within full 1080x1920 (no safe-zone trim).
+            # Brand visibility via corner watermark (step 7) + outro card (step 8).
+            # If pad_bg_image given, use it as bg (legacy band layout).
 
-            layout = _compute_pad_layout(content_w, content_h)
-            disp_w, disp_h = layout["disp_w"], layout["disp_h"]
-            top_h, bot_h = layout["top_h"], layout["bot_h"]
-            log.info(f"Pad layout: disp={disp_w}x{disp_h}  top_band={top_h}px  bot_band={bot_h}px")
-
-            # Logo size in top band — 60% of band height, capped at 280px, min 80px
-            pad_logo_size = max(80, min(int(top_h * 0.6), 280))
-            pad_logo_y = (top_h - pad_logo_size) // 2  # centered in top band
-
-            # Text sizes — fit within bottom band height
-            pad_title_fs = max(28, min(int(bot_h * 0.30), 96))
-            pad_sub_fs   = max(18, min(int(bot_h * 0.16), 44))
-            # Stack title + sub centered vertically in bot band
-            text_gap = 16
-            text_total_h = pad_title_fs + text_gap + pad_sub_fs
-            text_start_y = disp_h + top_h + (bot_h - text_total_h) // 2
-            pad_title_y = text_start_y
-            pad_sub_y = text_start_y + pad_title_fs + text_gap
-
-            # Choose base bg: static PNG if given, else lavfi gradient
             if pad_bg_image:
-                base_filter = f"[1:v]scale={W}:{H},setsar=1"
-                base_inputs = ["-loop", "1", "-framerate", "30", "-i", pad_bg_image]
+                bg_chunk = f"[1:v]scale={W}:{H},setsar=1[bgblur]"
+                bg_inputs_extra = ["-loop", "1", "-framerate", "30", "-i", pad_bg_image]
+                n_extra = 1
+                log.info("Bg: pad_bg_image (legacy bands layout)")
             else:
-                base_filter = "[1:v]scale={W}:{H},setsar=1".format(W=W, H=H)
-                base_inputs = ["-f", "lavfi", "-i",
-                    f"gradients=s={W}x{H}:c0=0x1E1B4B:c1=0x5B21B6:type=linear:duration=999:speed=0"]
-
-            # Logo input (uses outro_logo_image if available, else watermark_image)
-            # When pad_bg_image is provided, assume PNG already has brand elements
-            # baked in safe zones — skip dynamic logo+text to avoid duplicates.
-            pad_logo_src = outro_logo_image or watermark_image
-            has_pad_logo = (
-                bool(pad_logo_src) and top_h >= 100 and not pad_bg_image
-            )
-            has_pad_text = bot_h >= 100 and not pad_bg_image
-
-            # Build filter graph incrementally
-            chunks = [f"{base_filter}[bg0]"]
-            current_label = "bg0"
-
-            if has_pad_logo:
-                logo_idx = 2  # input index for pad logo
-                chunks.append(
-                    f"[{logo_idx}:v]scale={pad_logo_size}:{pad_logo_size},"
-                    f"format=rgba,colorchannelmixer=aa=0.95[padlogo]"
+                bg_chunk = (
+                    f"[0:v]{pre_crop}scale={W}:{H}:force_original_aspect_ratio=increase,"
+                    f"crop={W}:{H},boxblur=20:5,setsar=1[bgblur]"
                 )
-                chunks.append(
-                    f"[{current_label}][padlogo]overlay=(W-w)/2:{pad_logo_y}[bg1]"
-                )
-                current_label = "bg1"
+                bg_inputs_extra = []
+                n_extra = 0
+                log.info("Bg: blur-pad (max content)")
 
-            if has_pad_text:
-                title_filter = (
-                    f"drawtext=fontfile='{FONT_FF}':text='{outro_title}':"
-                    f"fontsize={pad_title_fs}:fontcolor=white:"
-                    f"x=(w-text_w)/2:y={pad_title_y}"
-                )
-                sub_filter = (
-                    f"drawtext=fontfile='{FONT_FF}':text='{outro_subtitle}':"
-                    f"fontsize={pad_sub_fs}:fontcolor=0xA78BFA:"
-                    f"x=(w-text_w)/2:y={pad_sub_y}"
-                )
-                chunks.append(f"[{current_label}]{title_filter},{sub_filter}[bg2]")
-                current_label = "bg2"
-
-            # Source video: pre-crop bars → scale-fit-within → color LUT
-            chunks.append(
+            fg_chunk = (
                 f"[0:v]{pre_crop}scale={W}:{H}:force_original_aspect_ratio=decrease,"
                 f"setsar=1,{color}[fg]"
             )
-            chunks.append(
-                f"[{current_label}][fg]overlay=(W-w)/2:(H-h)/2:shortest=1"
-            )
-
-            bg_filter = ";".join(chunks)
-            bg_inputs = ["-i", working_input] + base_inputs
-            n_bg_inputs = 2  # source + base
-            if has_pad_logo:
-                bg_inputs += ["-loop", "1", "-framerate", "30", "-i", pad_logo_src]
-                n_bg_inputs = 3
+            overlay_chunk = "[bgblur][fg]overlay=(W-w)/2:(H-h)/2:shortest=1"
+            bg_filter = ";".join([bg_chunk, fg_chunk, overlay_chunk])
+            bg_inputs = ["-i", working_input] + bg_inputs_extra
+            n_bg_inputs = 1 + n_extra
             bg_label = ""
 
         body = os.path.join(work, "body.mp4")
