@@ -471,43 +471,70 @@ def _detect_content_crop(video_path: str, src_w: int, src_h: int,
         return None
 
 
-def _detect_endcard_start(video_path: str, src_dur: float,
-                          min_drop_pct: float = 0.65,
-                          min_tail_s: float = 0.3) -> float | None:
-    """Detect end-card start timestamp via ffmpeg scene-change detection.
+def _scan_freeze(video_path: str, src_dur: float, min_tail_s: float = 0.3,
+                 noise: float = 0.003, min_freeze: float = 0.4,
+                 max_tail_pct: float = 0.55) -> float | None:
+    """Return the start of the trailing static card (outro), or None.
 
-    Looks for the EARLIEST significant scene change in the last (1-min_drop_pct)
-    of the source. Using min() instead of max() handles multi-card outros (e.g.
-    a "TRY NOW!" card followed by a "Download Now" card — we want to cut at the
-    first card, not the transition between them).
+    Uses ffmpeg `freezedetect` and pairs freeze_start/freeze_end events into
+    segments. A competitor outro is a near-static card that the video ENDS on,
+    so the target is the freeze segment that runs to (near) EOF — NOT the
+    earliest freeze (a held before/after photo mid-video is also "frozen" and
+    must not be mistaken for the outro). `noise`=0.003 (~ -50dB) tolerates cards
+    with minor animation (drifting clouds, a pulsing CTA).
 
-    Uses a low threshold (0.15) to catch soft fades into outro cards, not just
-    hard cuts.
-
-    Returns timestamp in seconds if the end-card tail is at least
-    `min_tail_s` long; else None (no clear end-card found).
+    Guards: ignore if the trailing freeze is shorter than `min_tail_s` (no real
+    card) or longer than `max_tail_pct` of the video (a mostly-static source —
+    cutting it would gut real content).
     """
     try:
         r = subprocess.run(
             ["ffmpeg", "-i", video_path,
-             "-vf", "select='gte(scene,0.08)',showinfo",
-             "-vsync", "0", "-an", "-f", "null", "-"],
+             "-vf", f"freezedetect=n={noise}:d={min_freeze}",
+             "-map", "0:v:0", "-an", "-f", "null", "-"],
             capture_output=True, text=True, timeout=120,
         )
-        times = [float(m.group(1)) for m in re.finditer(r"pts_time:(\d+\.?\d*)", r.stderr)]
-        if not times:
+        events = [(m.group(1), float(m.group(2)))
+                  for m in re.finditer(r"freeze_(start|end):\s*([\d.]+)", r.stderr)]
+        segs, cur = [], None
+        for typ, t in events:
+            if typ == "start":
+                cur = t
+            elif typ == "end" and cur is not None:
+                segs.append((cur, t)); cur = None
+        if cur is not None:           # freeze still open at EOF = ends on a card
+            segs.append((cur, src_dur))
+        # Trailing freeze: the segment whose end reaches (near) EOF
+        tail = [s for s, e in segs if e >= src_dur - 0.6]
+        if not tail:
             return None
-        # Keep only times in the valid outro window
-        window_start = src_dur * min_drop_pct
-        window_end   = src_dur - min_tail_s
-        valid = [t for t in times if window_start <= t <= window_end]
-        if not valid:
+        start = min(tail)             # earliest of trailing block (multi-card outro)
+        tail_len = src_dur - start
+        if tail_len < min_tail_s or tail_len > src_dur * max_tail_pct:
             return None
-        # Return the EARLIEST scene change in the window — that's where the outro begins
-        return min(valid)
+        return start
     except Exception as e:
-        log.warning(f"endcard detection failed: {e}")
+        log.warning(f"freeze detection failed: {e}")
         return None
+
+
+def _detect_endcard_start(video_path: str, src_dur: float,
+                          min_tail_s: float = 0.3) -> float | None:
+    """Detect outro/end-card start timestamp.
+
+    A real competitor outro is a near-static brand card that the video ENDS on.
+    The load-bearing signal is therefore a freeze segment that reaches EOF — NOT
+    a scene-change near the tail. A scene-change alone fires on ordinary content
+    cuts (e.g. a UGC testimonial cutting to its low-motion closing shot), which
+    must NOT be trimmed; a static card always registers a trailing freeze.
+
+    A static card always registers a freeze that runs to EOF; its start is the
+    cut/fade into the card. We return that freeze start directly — NOT a nearby
+    scene-change, which would risk backing up into real content before the card.
+
+    Returns the freeze start, or None if the video doesn't end on a static card.
+    """
+    return _scan_freeze(video_path, src_dur, min_tail_s)
 
 
 async def _generate_tts(text: str, voice: str, output_path: str, *, rate: str = "+0%") -> None:
@@ -644,9 +671,9 @@ def brand_pass_video(
     outro_duration: float | None = None,
     bgm_volume: float | None = None,
     trim_endcard: bool = False,
-    trim_endcard_min_drop_pct: float = 0.7,
     pad_bg_image: str | None = None,
     bgm_replace_path: str | None = None,
+    keep_original_voice: bool = False,
     work_root: str | None = None,
     random_seed: int | None = None,
 ) -> str:
@@ -658,10 +685,10 @@ def brand_pass_video(
     Outro: pass `outro_logo_image=<png_path>` to add a logo above the brand text
     on the outro card.
 
-    End-card trim: with `trim_endcard=True`, runs ffmpeg scene-change detection
-    on the source and trims away the last static end-card scene (e.g. a
-    competitor's app catalog screen). Only trims if a clear scene change is
-    found in the last (1-min_drop_pct) of duration.
+    End-card trim: with `trim_endcard=True`, runs ffmpeg freeze-detection on the
+    source and trims the trailing static end-card the video ends on (e.g. a
+    competitor's app catalog screen). Only trims when a freeze segment reaches
+    EOF; videos ending on motion (e.g. a UGC testimonial) are left intact.
 
     `random_seed=None` → fresh random each call. `random_seed=<int>` → deterministic.
     Explicit `voice` / `outro_duration` / `bgm_volume` override the jittered pick.
@@ -716,7 +743,7 @@ def brand_pass_video(
         working_input = input_path
         working_dur = _ffprobe_duration(input_path)
         if trim_endcard:
-            endcard_t = _detect_endcard_start(input_path, working_dur, trim_endcard_min_drop_pct)
+            endcard_t = _detect_endcard_start(input_path, working_dur)
             if endcard_t:
                 trimmed = os.path.join(work, "src_trimmed.mp4")
                 subprocess.run(
@@ -746,11 +773,25 @@ def brand_pass_video(
         total_dur = working_dur + p["outro_dur"]
         mixed_audio = os.path.join(work, "mixed.m4a")
         has_voice = bool(transcript and transcript.strip())
+        keep_voice = keep_original_voice and has_voice
+
+        # When keeping the original voice we always need Demucs to isolate the
+        # source vocals; reuse those stems for the BGM bed too if no replacement.
+        stems = None
+        orig_vocals = None
+        if keep_voice:
+            log.info("Keep original voice: Demucs htdemucs separating source vocals ...")
+            demucs_dir = os.path.join(work, "demucs")
+            os.makedirs(demucs_dir, exist_ok=True)
+            stems = separate_audio(src_audio, demucs_dir, model="htdemucs")
+            orig_vocals = stems["vocals"]
 
         # Pick BGM source: replacement track > Demucs-separated > raw source
         if bgm_replace_path:
             bgm = bgm_replace_path
             log.info(f"BGM: replacement={os.path.basename(bgm)} (skip Demucs)")
+        elif keep_voice:
+            bgm = stems["no_vocals"]
         elif has_voice:
             log.info("Demucs htdemucs separating BGM ...")
             demucs_dir = os.path.join(work, "demucs")
@@ -761,17 +802,22 @@ def brand_pass_video(
             bgm = src_audio  # passthrough — no separation needed
 
         if has_voice:
-            # VOICE PATH: TTS over BGM (ducked), bgm loops to cover full duration
-            rate_str = f"{p['tts_rate_pct']:+d}%"
-            tts_audio = os.path.join(work, "tts.mp3")
-            log.info(f"TTS Edge ({p['voice']}, rate={rate_str}) ...")
-            asyncio.run(_generate_tts(transcript, p["voice"], tts_audio, rate=rate_str))
+            # VOICE PATH: voice over BGM (ducked), bgm loops to cover full duration.
+            # voice source = original isolated vocals (keep_voice) or fresh TTS.
+            if keep_voice:
+                voice_track = orig_vocals
+                log.info(f"Mixing ORIGINAL voice over BGM (BGM vol={p['bgm_vol']}) → {total_dur:.2f}s ...")
+            else:
+                rate_str = f"{p['tts_rate_pct']:+d}%"
+                voice_track = os.path.join(work, "tts.mp3")
+                log.info(f"TTS Edge ({p['voice']}, rate={rate_str}) ...")
+                asyncio.run(_generate_tts(transcript, p["voice"], voice_track, rate=rate_str))
+                log.info(f"Mixing TTS over BGM (BGM vol={p['bgm_vol']}) → {total_dur:.2f}s ...")
 
-            log.info(f"Mixing TTS over BGM (BGM vol={p['bgm_vol']}) → {total_dur:.2f}s ...")
             r = subprocess.run(
                 ["ffmpeg", "-y",
                  "-stream_loop", "-1", "-i", bgm,
-                 "-i", tts_audio,
+                 "-i", voice_track,
                  "-filter_complex",
                  f"[1:a]volume=1.0,apad[v0];"
                  f"[0:a]volume={p['bgm_vol']},apad[v1];"
