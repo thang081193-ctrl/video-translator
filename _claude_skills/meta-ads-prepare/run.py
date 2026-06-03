@@ -37,7 +37,7 @@ from pipeline.brand_pass import brand_pass_video  # noqa: E402
 def process_one(args):
     (src_path, dst_path, seed, watermark, watermark_size,
      outro_title, outro_subtitle, outro_logo, outro_logo_size,
-     brand_bg, trim_endcard, bgm_replace) = args
+     brand_bg, trim_endcard, bgm_replace, outro_video) = args
     src = Path(src_path)
     dst = Path(dst_path)
     if dst.exists() and dst.stat().st_size > 100_000:
@@ -59,6 +59,8 @@ def process_one(args):
         if outro_logo:
             kwargs["outro_logo_image"] = outro_logo
             kwargs["outro_logo_size"] = outro_logo_size
+        if outro_video:
+            kwargs["outro_video"] = outro_video
         if brand_bg:
             kwargs["pad_bg_image"] = brand_bg
         if bgm_replace:
@@ -145,6 +147,8 @@ def main():
     ap.add_argument("--outro-logo", default=None,
                     help="Logo PNG for outro card (defaults to --watermark if not set)")
     ap.add_argument("--outro-logo-size", type=int, default=300)
+    ap.add_argument("--outro-video", default=None,
+                    help="Pre-made MP4 outro card. If set, replaces Pillow-generated outro.")
     ap.add_argument("--brand-bg", default=None,
                     help="1080x1920 brand-designed PNG canvas for non-9:16 sources")
     ap.add_argument("--trim-endcard", action="store_true",
@@ -168,7 +172,7 @@ def main():
     dst_root = Path(args.dst_root).resolve()
     if not src_root.is_dir():
         sys.exit(f"src-root not a directory: {src_root}")
-    for p in [args.watermark, args.outro_logo, args.brand_bg]:
+    for p in [args.watermark, args.outro_logo, args.brand_bg, args.outro_video]:
         if p and not Path(p).is_file():
             sys.exit(f"file not found: {p}")
     outro_logo = args.outro_logo or args.watermark
@@ -203,7 +207,7 @@ def main():
         jobs.append((src, dst, seed, args.watermark, args.watermark_size,
                      args.outro_title, args.outro_subtitle, outro_logo,
                      args.outro_logo_size, args.brand_bg, args.trim_endcard,
-                     bgm_replace))
+                     bgm_replace, args.outro_video))
     print(f"Total jobs: {len(jobs)}  workers={args.workers}  "
           f"endcard_trim={args.trim_endcard}  brand_bg={'yes' if args.brand_bg else 'no'}  "
           f"bgm_pool={'yes (mode=' + args.bgm_mode + ')' if bgm_pool else 'no (use source BGM)'}",
