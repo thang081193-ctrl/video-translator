@@ -12,6 +12,9 @@ Custom skills built for processing Meta Ads Library videos for performance-marke
 | [analyze-ad-angles](analyze-ad-angles) | Cluster videos into creative angles via Whisper + Gemini multimodal; outputs CSVs and maintains a daily-stable taxonomy |
 | [super-saiyan-translate](super-saiyan-translate) | High-quality two-phase translation: extract transcripts → human/LLM-translate in chat → dub with original BGM. Bypasses the project's auto-translate for better ad-hook fidelity |
 | [meta-ads-prepare](meta-ads-prepare) | (formerly `brand-pass`) Prepare sources as Meta/TikTok ad creatives — Reels 1080×1920, Andromeda dedup evasion. Three pillars: (1) voice/BGM routing pre-step (`detect_voice.py`), (2) three audio modes — TTS re-dub / keep-original-voice / music-only, (3) freeze-to-EOF endcard trim (no over-trim on testimonials). Plus side-blur strip, max-content layout, royalty-free BGM pool by cluster. See [HANDOFF-text-reburn.md](meta-ads-prepare/HANDOFF-text-reburn.md) for the next phase. |
+| [gen-outro](gen-outro) | Generate a branded outro card PNG (1080×1920) — app icon, title, subtitle, CTA. Themes: baby / tech / minimal. Preview before committing to a full meta-ads-prepare batch. |
+| [trim-endcard](trim-endcard) | Standalone competitor outro/end-card trimmer (scene-change based). Use to clean a raw library before brand-passing. NOTE: the in-pipeline `meta-ads-prepare` endcard trim uses the newer freeze-to-EOF logic. |
+| [split-campaigns](split-campaigns) | Voice/BGM classification (`detect_voice.py` → `voice_manifest.csv`) + campaign-split helper (`prep_campaign_split.py`). The voice-routing pre-step for meta-ads-prepare. |
 
 ## Dependencies
 - The Video Translator project at `D:\Dev\Tools\Video Translator` (or wherever cloned) provides the `.venv` Python + ffmpeg / faster-whisper / Demucs.

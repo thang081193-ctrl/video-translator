@@ -45,6 +45,7 @@ FOLDER_TO_CODE = {
     "नेपाली": "NE",
     "Kiswahili": "SW",
     "தமிழ்": "TA",
+    "తెలుగు": "TE",
     "اردو": "UR",
     "Yorùbá": "YO",
     "বাংলা": "BN",

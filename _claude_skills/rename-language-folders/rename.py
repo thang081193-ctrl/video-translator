@@ -45,6 +45,7 @@ NATIVE = [
     ("नेपाली",      ["ne", "nepali"]),
     ("Kiswahili",  ["sw", "swahili"]),
     ("தமிழ்",      ["ta", "tamil"]),
+    ("తెలుగు",      ["te", "telugu"]),
     ("اردو",        ["ur", "urdu"]),
     ("Yorùbá",     ["yo", "yoruba"]),
     ("বাংলা",       ["bn", "bengali", "bangla"]),

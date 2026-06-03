@@ -359,6 +359,11 @@ class GeminiRotator:
                         self.cool_until[(key, m)] = time.time() + 86400
                     last_err = e
                     continue
+                if "PERMISSION_DENIED" in msg or "CONSUMER_SUSPENDED" in msg or "has been suspended" in msg or "403" in msg:
+                    for m in self.models:
+                        self.cool_until[(key, m)] = time.time() + 86400
+                    last_err = e
+                    continue
                 if "500" in msg or "503" in msg or "UNAVAILABLE" in msg:
                     time.sleep(min(2 ** attempt, 8))
                     last_err = e

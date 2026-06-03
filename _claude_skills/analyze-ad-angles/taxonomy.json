@@ -1,101 +1,133 @@
 {
   "angles": [
     {
+      "name": "Make Your Photos Dance",
+      "description": "Stop the scroll by showing static photos suddenly busting impressive, fluid dance moves.",
+      "signal_keywords": [
+        "make photos dance",
+        "dance animation",
+        "pics dance",
+        "dancing photo"
+      ]
+    },
+    {
+      "name": "Make Your Photos Sing",
+      "description": "Animate still portraits of babies or adults to lip-sync perfectly to popular or funny songs.",
+      "signal_keywords": [
+        "make baby sing",
+        "singing transformation",
+        "photo sing",
+        "singing animation"
+      ]
+    },
+    {
+      "name": "Bring Static Photos to Life",
+      "description": "Demonstrate the magical transition of a flat, still image becoming a dynamic, moving video.",
+      "signal_keywords": [
+        "bring photos to life",
+        "photo animation magic",
+        "still photos",
+        "animation reveal"
+      ]
+    },
+    {
+      "name": "Become Anime / Cartoon Character",
+      "description": "Tap into self-expression by transforming ordinary selfies into stylized Pixar or anime-style avatars.",
+      "signal_keywords": [
+        "become cartoon",
+        "pixar-style",
+        "anime character",
+        "cartoon wallpaper"
+      ]
+    },
+    {
+      "name": "Custom Emoji Sticker Pack",
+      "description": "Turn cute baby or pet expressions into personalized, shareable digital sticker packs.",
+      "signal_keywords": [
+        "sticker pack",
+        "baby emoji",
+        "custom stickers",
+        "expression sticker"
+      ]
+    },
+    {
       "name": "Before/After Transformation Reveal",
-      "description": "Highlights the dramatic contrast between a cluttered or empty space and a polished, finished design to prove efficacy.",
+      "description": "Hook viewers with a dramatic visual contrast showing a plain original photo transforming into a stunning masterpiece.",
       "signal_keywords": [
-        "Before/After Transformation Reveal",
-        "Before/After Room Transformation",
-        "Before/After Room Makeover",
-        "Before/After Room Redesign",
-        "Before/After Home Transformation Reveal",
-        "Before/After Interior Design Transformation",
-        "Before/After Interior Transformation Reveal",
-        "Before/After Backyard Transformation"
+        "before/after",
+        "transformation reveal",
+        "makeover reveal",
+        "superstar transformation"
       ]
     },
     {
-      "name": "Instant Home Makeover Reveal",
-      "description": "Focuses on the speed of the transformation, promising an immediate change from an old space to a new one.",
+      "name": "Relatable Parenting Life Hack",
+      "description": "Position the app as an indispensable, stress-free shortcut for busy parents to capture perfect memories.",
       "signal_keywords": [
-        "Instant Home Makeover Reveal",
-        "Instant Room Makeover Reveal",
-        "Instant Room Makeover Transformation",
-        "Instant Room Redesign Transformation",
-        "Instant Room Transformation Reveal",
-        "Instant Interior Makeover Reveal",
-        "Instant Home Design Transformation",
-        "Instant Home Interior Redesign",
-        "Instant Home Layout Magic",
-        "Instant Interior Design Makeover"
+        "parenting hack",
+        "stress-free",
+        "DIY photoshoot",
+        "parenting stress"
       ]
     },
     {
-      "name": "Aspirational Aesthetic Room Makeover",
-      "description": "Targets the user's desire for a high-end, designer-quality living space by showcasing aspirational styles.",
+      "name": "Baby Milestone Photo Magic",
+      "description": "Create emotional montages and beautiful keepsakes tracking a child's growth milestones effortlessly.",
       "signal_keywords": [
-        "Aspirational Aesthetic Room Makeover",
-        "Aspirational Home Design Transformation",
-        "Aspirational Room Glow-up Reveal",
-        "Dream Home Transformation Reveal",
-        "Dream Room Transformation Reveal",
-        "Interior Design Style Showcase",
-        "Visualize Dream Home Styles",
-        "Visualize Your Dream Home",
-        "Copy Professional Interior Aesthetics"
+        "milestone photo",
+        "baby milestone",
+        "expression montage",
+        "milestone templates"
       ]
     },
     {
-      "name": "Sketch to 3D Reality Reveal",
-      "description": "Demonstrates the technical capability of turning 2D blueprints or sketches into realistic 3D visualizations.",
+      "name": "1-Tap Magic Demo",
+      "description": "Focus on the extreme ease of use, promising professional-grade results in just one tap or three simple steps.",
       "signal_keywords": [
-        "Sketch to 3D Reality Reveal",
-        "Floor Plan to 3D Design Reveal",
-        "Floor Plan to 3D Visualization",
-        "Blueprint to Reality Transformation",
-        "2D to 3D Magic Reveal",
-        "Instant 2D to 3D Transformation"
+        "1-tap magic",
+        "3 steps promise",
+        "easy demo",
+        "expression variety"
       ]
     },
     {
-      "name": "Awkward Space Transformation Reveal",
-      "description": "Focuses on solving specific pain points like cluttered, useless, or awkward spaces to show utility.",
+      "name": "Pet & Child Photo Magic",
+      "description": "Capture hearts by blending pets and children into whimsical, high-quality fantasy portraits.",
       "signal_keywords": [
-        "Awkward Space Transformation Reveal",
-        "Useless Space Transformation Reveal",
-        "Cluttered to Designer Transformation",
-        "Space Transformation Challenge"
+        "pet and child",
+        "pet portrait",
+        "fantasy photo",
+        "pet humanization"
       ]
     },
     {
-      "name": "AI Garden Design Speed",
-      "description": "Highlights the ease and speed of transforming outdoor spaces and backyards using AI.",
+      "name": "Create Your AI Companion",
+      "description": "Engage users by bringing custom-designed AI characters and animated companions to life.",
       "signal_keywords": [
-        "AI Garden Design Speed",
-        "Effortless AI Garden Design",
-        "Backyard Garden Transformation Reveal",
-        "Backyard Transformation Reveal"
+        "AI companion",
+        "character creation",
+        "animated companion"
       ]
     },
     {
-      "name": "Instant Layout Design Promise",
-      "description": "Focuses on the functional promise of generating home layouts and designs instantly.",
+      "name": "Time Travel Photo Reveal",
+      "description": "Evoke nostalgia by restoring old photos or projecting what someone will look like in the future.",
       "signal_keywords": [
-        "Instant Layout Design Promise",
-        "Instant AI Home Layout Generator",
-        "AI Home Layout Transformation",
-        "AI Home Design Reveal",
-        "AI Home Design Transformation",
-        "AI Interior Design Transformation",
-        "AI Instant Home Makeover",
-        "AI Instant Home Redecoration",
-        "AI Room Makeover",
-        "3-Second AI Room Makeover",
-        "Designer Cost vs AI Speed",
-        "Instant Dream Home Reveal",
-        "Instant Home Design Visualization"
+        "age progression",
+        "old photo restoration",
+        "memory reveal"
+      ]
+    },
+    {
+      "name": "Viral Trend Challenge Recreation",
+      "description": "Leverage active social media trends and challenges to encourage users to recreate viral moments.",
+      "signal_keywords": [
+        "viral trend",
+        "dance challenge",
+        "join challenge",
+        "trend recreation"
       ]
     }
   ],
-  "generated_at": "2026-05-13T11:49:46"
+  "generated_at": "2026-05-27T17:45:19"
 }
