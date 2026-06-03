@@ -75,9 +75,9 @@ SAFE_JITTER = {
     "wm_dy":        (-15, 15),
     "bgm_vol":      (0.65, 0.80),
     "tts_rate_pct": (-3, 3),
-    "outro_dur":    (1.3, 1.7),
-    "outro_bg":     ["0x151515", "0x1a1a1a", "0x1f1f1f", "0x222222"],
-    "outro_sub_color": ["0xc8c8c8", "0xcfcfcf", "0xd5d5d5", "0xdcdcdc"],
+    "outro_dur":    (2.0, 2.5),
+    "outro_bg":     ["0x7B2FBE", "0x6020A8", "0x8B40CF", "0x4A90D9", "0x3070C0", "0x5518A0"],
+    "outro_sub_color": ["0xFFFFFF", "0xF0F0FF", "0xE8E8FF", "0xDDE8FF"],
     "crf":          [19, 20, 21],
     "preset":       ["fast", "medium"],
 }
@@ -106,6 +106,186 @@ for _f in [r"C:\Windows\Fonts\seguisb.ttf", r"C:\Windows\Fonts\segoeui.ttf",
 if not _FONT:
     raise RuntimeError("No system font found for drawtext filter")
 FONT_FF = _FONT.replace("\\", "/").replace(":", "\\:")
+
+
+def _hex_to_rgb(hex_str: str) -> tuple:
+    h = hex_str.lstrip("0x").lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _generate_outro_frame(
+    canvas_w: int, canvas_h: int,
+    title: str, subtitle: str,
+    logo_path: str | None, logo_size: int,
+    accent_hex: str, rng: "random.Random",
+) -> "PIL.Image.Image":
+    """Render a clean 2026-style outro card.
+
+    Minimal layout: dark gradient bg → large rounded-square app icon →
+    bold app name → subtitle → 'Download Now' CTA.
+    No decorations, no phone mockup — clarity over complexity.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    ar, ag, ab = _hex_to_rgb(accent_hex)
+
+    # ── Background: soft pastel pink-lavender gradient (baby/chibi theme) ───
+    img  = Image.new("RGBA", (canvas_w, canvas_h), (255, 245, 250, 255))
+    draw = ImageDraw.Draw(img, "RGBA")
+    # top: warm cream-white → bottom: soft lavender-pink
+    top_c = (255, 248, 252)
+    bot_c = (245, 228, 252)
+    for y in range(canvas_h):
+        t = y / canvas_h
+        draw.line([(0, y), (canvas_w, y)], fill=(
+            int(top_c[0] + (bot_c[0]-top_c[0])*t),
+            int(top_c[1] + (bot_c[1]-top_c[1])*t),
+            int(top_c[2] + (bot_c[2]-top_c[2])*t), 255))
+
+    # Theme colors (baby/chibi — warm & soft)
+    PINK      = (255,  90, 140)   # hot pink CTA
+    PINK_D    = (230,  55, 110)   # deeper pink (shadow/divider)
+    LAVENDER  = (180, 130, 220)   # soft purple accent
+    TEXT_D    = ( 60,  30,  80)   # dark plum text (readable on light bg)
+    TEXT_M    = (140,  90, 170)   # mid lavender subtitle
+    WHITE     = (255, 255, 255)
+
+    # ── Fonts ────────────────────────────────────────────────────────────────
+    font_bold = font_med = font_cta = font_sm = None
+    for fb, fr in [
+        (r"C:\Windows\Fonts\seguisb.ttf", r"C:\Windows\Fonts\segoeui.ttf"),
+        (r"C:\Windows\Fonts\arialbd.ttf",  r"C:\Windows\Fonts\arial.ttf"),
+    ]:
+        if os.path.exists(fb):
+            font_bold = ImageFont.truetype(fb, 110)
+            font_med  = ImageFont.truetype(fr if os.path.exists(fr) else fb, 66)
+            font_cta  = ImageFont.truetype(fb, 76)
+            font_sm   = ImageFont.truetype(fr if os.path.exists(fr) else fb, 42)
+            break
+
+    def draw_centered(text, fnt, y, fill, shadow_fill=None):
+        if not fnt:
+            return 0
+        bb = fnt.getbbox(text)
+        tw, th = bb[2]-bb[0], bb[3]-bb[1]
+        tx = (canvas_w - tw) // 2 - bb[0]
+        if shadow_fill:
+            draw.text((tx+2, y+2), text, font=fnt, fill=shadow_fill)
+        draw.text((tx, y), text, font=fnt, fill=fill)
+        return th
+
+    # ── Scattered baby decorations ───────────────────────────────────────────
+    import math
+    decorations = [
+        # (x, y, type, size, alpha)
+        (120, 220,  "heart",  28, 180),
+        (940, 180,  "star",   22, 160),
+        (80,  550,  "star",   18, 140),
+        (980, 480,  "heart",  24, 170),
+        (160, 900,  "dot",    16, 120),
+        (930, 860,  "star",   20, 150),
+        (100, 1280, "heart",  22, 140),
+        (960, 1220, "dot",    18, 130),
+        (140, 1580, "star",   24, 160),
+        (930, 1540, "heart",  20, 150),
+        (200, 1800, "dot",    14, 100),
+        (870, 1780, "star",   16, 120),
+    ]
+    for (dx, dy, dtype, dsz, dalpha) in decorations:
+        dx += rng.randint(-20, 20)
+        dy += rng.randint(-20, 20)
+        col = (*PINK, dalpha) if dtype == "heart" else (*LAVENDER, dalpha)
+        if dtype == "dot":
+            draw.ellipse([dx-dsz//2, dy-dsz//2, dx+dsz//2, dy+dsz//2], fill=col)
+        elif dtype == "star":
+            # 4-point star using two rotated rectangles
+            for angle in [0, 45]:
+                rad = math.radians(angle)
+                pts = []
+                for a in [0, 90, 180, 270]:
+                    r2 = math.radians(a + angle)
+                    r_outer = dsz // 2
+                    r_inner = dsz // 5
+                    pts.append((dx + r_outer * math.cos(r2), dy + r_outer * math.sin(r2)))
+                    r2b = math.radians(a + 45 + angle)
+                    pts.append((dx + r_inner * math.cos(r2b), dy + r_inner * math.sin(r2b)))
+                draw.polygon(pts, fill=col)
+        else:  # heart — two overlapping circles + triangle
+            hw = dsz
+            draw.ellipse([dx-hw, dy-hw//2, dx, dy+hw//2], fill=col)
+            draw.ellipse([dx, dy-hw//2, dx+hw, dy+hw//2], fill=col)
+            draw.polygon([(dx-hw, dy+hw//4), (dx+hw, dy+hw//4),
+                          (dx, dy+hw)], fill=col)
+
+    # ── Layout constants ──────────────────────────────────────────────────────
+    ICON_SZ  = 440
+    ICON_R   = 98
+    icon_x   = (canvas_w - ICON_SZ) // 2
+    icon_y   = int(canvas_h * 0.25)   # optical centre — icon top at 25%
+
+    # ── App icon ──────────────────────────────────────────────────────────────
+    # Soft pink drop shadow (not black)
+    for i in range(22, 0, -2):
+        a = int(30 * (1 - i/22))
+        draw.rounded_rectangle(
+            [icon_x-i//3, icon_y+i//2, icon_x+ICON_SZ+i//3, icon_y+ICON_SZ+i],
+            radius=ICON_R+i//3, fill=(*PINK, a))
+
+    # White icon background
+    draw.rounded_rectangle(
+        [icon_x, icon_y, icon_x+ICON_SZ, icon_y+ICON_SZ],
+        radius=ICON_R, fill=(255, 255, 255, 255))
+    # Thin pink border
+    draw.rounded_rectangle(
+        [icon_x, icon_y, icon_x+ICON_SZ, icon_y+ICON_SZ],
+        radius=ICON_R, outline=(*PINK, 80), width=3, fill=None)
+
+    if logo_path and os.path.isfile(logo_path):
+        pad = 48
+        lsz = ICON_SZ - pad*2
+        li  = Image.open(logo_path).convert("RGBA").resize((lsz, lsz), Image.LANCZOS)
+        img.paste(li, (icon_x+pad, icon_y+pad), li)
+
+    # ── Text block ────────────────────────────────────────────────────────────
+    text_y = icon_y + ICON_SZ + 70
+
+    # App name — dark plum on light bg
+    draw_centered(title, font_bold, text_y,
+                  fill=(*TEXT_D, 255), shadow_fill=(255,255,255,120))
+    bb1     = font_bold.getbbox(title) if font_bold else (0,0,0,110)
+    text_y += (bb1[3]-bb1[1]) + 20
+
+    # Subtitle
+    draw_centered(subtitle, font_med, text_y, fill=(*TEXT_M, 230))
+    bb2     = font_med.getbbox(subtitle) if font_med else (0,0,0,66)
+    text_y += (bb2[3]-bb2[1]) + 56
+
+    # Hot-pink pill CTA button (like Baby Journey reference)
+    CTA_TEXT = "Download Now!"
+    bb3  = font_cta.getbbox(CTA_TEXT) if font_cta else (0,0,0,80)
+    ctw  = bb3[2]-bb3[0]
+    cth  = bb3[3]-bb3[1]
+    P_W, P_H = ctw + 120, cth + 48
+    px   = (canvas_w - P_W) // 2
+    # Pill shadow
+    draw.rounded_rectangle([px+4, text_y+6, px+P_W+4, text_y+P_H+6],
+                            radius=P_H//2, fill=(*PINK_D, 120))
+    # Pill fill
+    draw.rounded_rectangle([px, text_y, px+P_W, text_y+P_H],
+                            radius=P_H//2, fill=(*PINK, 255))
+    # No shimmer — clean flat pill on light bg
+    # CTA text
+    tx3 = px + (P_W-ctw)//2 - bb3[0]
+    ty3 = text_y + (P_H-cth)//2 - bb3[1]
+    draw.text((tx3+2, ty3+2), CTA_TEXT, font=font_cta, fill=(180,30,70,150))
+    draw.text((tx3,   ty3),   CTA_TEXT, font=font_cta, fill=(*WHITE, 255))
+    text_y += P_H + 50
+
+    # Rating — social proof (no star emoji, plain text)
+    draw_centered("4.8  /  2M+ Downloads", font_sm, text_y,
+                  fill=(*LAVENDER, 210))
+
+    return img.convert("RGB")
 
 
 def _ffprobe_duration(path: str) -> float:
@@ -292,28 +472,39 @@ def _detect_content_crop(video_path: str, src_w: int, src_h: int,
 
 
 def _detect_endcard_start(video_path: str, src_dur: float,
-                          min_drop_pct: float = 0.7,
-                          min_tail_s: float = 1.5) -> float | None:
+                          min_drop_pct: float = 0.65,
+                          min_tail_s: float = 0.3) -> float | None:
     """Detect end-card start timestamp via ffmpeg scene-change detection.
 
-    Looks for the LAST significant scene change in the last (1-min_drop_pct)
-    of the source. Returns timestamp in seconds if the end-card is at least
+    Looks for the EARLIEST significant scene change in the last (1-min_drop_pct)
+    of the source. Using min() instead of max() handles multi-card outros (e.g.
+    a "TRY NOW!" card followed by a "Download Now" card — we want to cut at the
+    first card, not the transition between them).
+
+    Uses a low threshold (0.15) to catch soft fades into outro cards, not just
+    hard cuts.
+
+    Returns timestamp in seconds if the end-card tail is at least
     `min_tail_s` long; else None (no clear end-card found).
     """
     try:
         r = subprocess.run(
             ["ffmpeg", "-i", video_path,
-             "-vf", "select='gte(scene,0.35)',showinfo",
+             "-vf", "select='gte(scene,0.08)',showinfo",
              "-vsync", "0", "-an", "-f", "null", "-"],
             capture_output=True, text=True, timeout=120,
         )
         times = [float(m.group(1)) for m in re.finditer(r"pts_time:(\d+\.?\d*)", r.stderr)]
         if not times:
             return None
-        last = max(times)
-        if last >= src_dur * min_drop_pct and last <= src_dur - min_tail_s:
-            return last
-        return None
+        # Keep only times in the valid outro window
+        window_start = src_dur * min_drop_pct
+        window_end   = src_dur - min_tail_s
+        valid = [t for t in times if window_start <= t <= window_end]
+        if not valid:
+            return None
+        # Return the EARLIEST scene change in the window — that's where the outro begins
+        return min(valid)
     except Exception as e:
         log.warning(f"endcard detection failed: {e}")
         return None
@@ -449,6 +640,7 @@ def brand_pass_video(
     outro_subtitle: str = DEFAULT_OUTRO_SUB,
     outro_logo_image: str | None = None,
     outro_logo_size: int = 260,
+    outro_video: str | None = None,
     outro_duration: float | None = None,
     bgm_volume: float | None = None,
     trim_endcard: bool = False,
@@ -482,14 +674,28 @@ def brand_pass_video(
         raise FileNotFoundError(f"watermark_image: {watermark_image}")
     if outro_logo_image and not os.path.isfile(outro_logo_image):
         raise FileNotFoundError(f"outro_logo_image: {outro_logo_image}")
+    if outro_video and not os.path.isfile(outro_video):
+        raise FileNotFoundError(f"outro_video: {outro_video}")
     if pad_bg_image and not os.path.isfile(pad_bg_image):
         raise FileNotFoundError(f"pad_bg_image: {pad_bg_image}")
     os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
 
     p = _build_jittered_params(random_seed)
+    rng = random.Random(random_seed)   # second rng for outro frame jitter
     if voice is not None: p["voice"] = voice
     if outro_duration is not None: p["outro_dur"] = outro_duration
     if bgm_volume is not None: p["bgm_vol"] = bgm_volume
+
+    if outro_video:
+        try:
+            _probe = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", outro_video],
+                capture_output=True, text=True, check=True,
+            )
+            p["outro_dur"] = round(float(_probe.stdout.strip()), 2)
+        except Exception as _e:
+            log.warning(f"ffprobe outro_video failed ({_e}); keeping jittered outro_dur")
 
     if work_root:
         os.makedirs(work_root, exist_ok=True)
@@ -673,7 +879,7 @@ def brand_pass_video(
         body = os.path.join(work, "body.mp4")
         log.info("Encoding transformed body (zoom/pad + color + watermark) ...")
         if watermark_image:
-            wm_x = W - SIDE_SAFE - watermark_size + p["wm_dx"]
+            wm_x = SIDE_SAFE + p["wm_dx"]
             wm_y = TOP_SAFE + 20 + p["wm_dy"]
             wm_x = max(0, min(W - watermark_size, wm_x))
             wm_y = max(0, min(H - watermark_size, wm_y))
@@ -695,7 +901,7 @@ def brand_pass_video(
             )
         else:
             # drawtext watermark (legacy text-based)
-            wm_x = W - SIDE_SAFE - 140 + p["wm_dx"]
+            wm_x = SIDE_SAFE + p["wm_dx"]
             wm_y = TOP_SAFE + 20 + p["wm_dy"]
             drawtext_wm = (
                 f"drawtext=fontfile='{FONT_FF}':text='{watermark_text}':"
@@ -722,40 +928,33 @@ def brand_pass_video(
                     capture_output=True, check=True, text=True,
                 )
 
-        # 7. Outro card
+        # 7. Outro card — user-supplied mp4 OR Pillow-generated 2026 designed card
         outro = os.path.join(work, "outro.mp4")
-        log.info("Generating outro card ...")
-        logo_y = int(H * 0.30)               # top of logo
-        title_y = int(H * 0.30) + outro_logo_size + 80   # below logo
-        sub_y_off = title_y + 130             # below title
-        if outro_logo_image:
-            filter_complex = (
-                f"[1:v]scale={outro_logo_size}:{outro_logo_size}[logo];"
-                f"[0:v][logo]overlay=(W-w)/2:{logo_y},"
-                f"drawtext=fontfile='{FONT_FF}':text='{outro_title}':"
-                f"fontsize=96:fontcolor=white:x=(w-text_w)/2:y={title_y},"
-                f"drawtext=fontfile='{FONT_FF}':text='{outro_subtitle}':"
-                f"fontsize=42:fontcolor={p['outro_sub_color']}:x=(w-text_w)/2:y={sub_y_off}[vout]"
-            )
+        if outro_video:
+            log.info(f"Normalizing supplied outro video → {W}x{H}@30fps, no audio ...")
             subprocess.run(
-                ["ffmpeg", "-y",
-                 "-f", "lavfi", "-i", f"color=c={p['outro_bg']}:s={W}x{H}:d={p['outro_dur']}:r=30",
-                 "-loop", "1", "-i", outro_logo_image,
-                 "-filter_complex", filter_complex,
-                 "-map", "[vout]", "-t", f"{p['outro_dur']}",
-                 "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]), outro],
+                ["ffmpeg", "-y", "-i", outro_video,
+                 "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                        f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30",
+                 "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
+                 "-pix_fmt", "yuv420p", "-an", outro],
                 capture_output=True, check=True, text=True,
             )
         else:
+            outro_frame_png = os.path.join(work, "outro_frame.png")
+            log.info("Generating outro card (Pillow) ...")
+            frame = _generate_outro_frame(
+                W, H, outro_title, outro_subtitle,
+                outro_logo_image, outro_logo_size,
+                p["outro_bg"], rng,
+            )
+            frame.save(outro_frame_png)
             subprocess.run(
                 ["ffmpeg", "-y",
-                 "-f", "lavfi", "-i", f"color=c={p['outro_bg']}:s={W}x{H}:d={p['outro_dur']}:r=30",
-                 "-vf",
-                 f"drawtext=fontfile='{FONT_FF}':text='{outro_title}':"
-                 f"fontsize=110:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2-60,"
-                 f"drawtext=fontfile='{FONT_FF}':text='{outro_subtitle}':"
-                 f"fontsize=48:fontcolor={p['outro_sub_color']}:x=(w-text_w)/2:y=(h-text_h)/2+60",
-                 "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]), outro],
+                 "-loop", "1", "-framerate", "30", "-i", outro_frame_png,
+                 "-t", str(p["outro_dur"]),
+                 "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
+                 "-pix_fmt", "yuv420p", outro],
                 capture_output=True, check=True, text=True,
             )
 
