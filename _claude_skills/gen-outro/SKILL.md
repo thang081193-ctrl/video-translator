@@ -14,7 +14,7 @@ Standalone PIL-based outro card generator. Produces a 1080x1920 PNG with a gradi
 - User wants a standalone static asset (e.g. thumbnail, endcard image).
 
 ## Do NOT use when
-- User wants to apply the outro to a batch of videos — that's `brand-pass` skill.
+- User wants to apply the outro to a batch of videos — that's `meta-ads-prepare` skill.
 - User wants animated outro (this generates a static PNG only).
 
 ## Required information — ask if missing

@@ -7,7 +7,7 @@ description: Detect and trim competitor outro/end-card frames from the tail of a
 
 Standalone ffmpeg-based competitor end-card trimmer. Detects static/simple outro cards appended to ad videos and stream-copies a trimmed version (no re-encode, fast).
 
-**Part of the brand-pass skill upgrade set** — see also: `gen-outro` (outro card designer). The same detection logic is built into `brand-pass` via `--trim-endcard`; this skill lets you run the trim step standalone on a raw library before any other processing.
+**Part of the brand-pass skill upgrade set** — see also: `gen-outro` (outro card designer). The same detection logic is built into `meta-ads-prepare` via `--trim-endcard`; this skill lets you run the trim step standalone on a raw library before any other processing.
 
 ## When to use
 - Cleaning raw ad library downloads before brand-passing.

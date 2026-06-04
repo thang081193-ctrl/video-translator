@@ -54,7 +54,7 @@ Caveat: the gate is conservative — a testimonial buried under loud BGM can be 
 ## Usage
 
 ```bash
-"<video-translator>/.venv/Scripts/python.exe" -u "<skills-dir>/brand-pass/run.py" \
+"<video-translator>/.venv/Scripts/python.exe" -u "<skills-dir>/meta-ads-prepare/run.py" \
   --src-root  "<input folder>" \
   --dst-root  "<output folder>" \
   --watermark "<logo.png>" \
@@ -229,7 +229,7 @@ python trim_endcard.py --src "English/" --dst "English_trimmed/" --workers 4
 
 Use `trim-endcard` when you want to clean up a raw library *before* brand-passing, or to trim without the full branding overhead.
 
-> NOTE: the standalone `trim-endcard` skill still uses **scene-change** detection. The `--trim-endcard` flag inside `brand-pass` has moved to **freeze-to-EOF** detection (see "End-card detection" above), which is more accurate — it catches soft fades and won't over-trim motion-ending testimonials. If results differ, the in-pipeline freeze logic is the newer one.
+> NOTE: the standalone `trim-endcard` skill still uses **scene-change** detection. The `--trim-endcard` flag inside `meta-ads-prepare` has moved to **freeze-to-EOF** detection (see "End-card detection" above), which is more accurate — it catches soft fades and won't over-trim motion-ending testimonials. If results differ, the in-pipeline freeze logic is the newer one.
 
 ### `detect_voice` — voice/BGM classifier (in `split-campaigns`)
 Classify each source as VOICE vs BGM-only BEFORE brand-passing, so you can route deliberately (see "Voice/BGM routing").
