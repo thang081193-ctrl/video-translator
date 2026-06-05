@@ -8,6 +8,7 @@ __pycache__/
 _tts_temp/
 _tts_cache/
 _demucs_temp/
+_bgm/
 _ocr_frames/
 _ocr_overlays/
 _test_ocr_debug/
