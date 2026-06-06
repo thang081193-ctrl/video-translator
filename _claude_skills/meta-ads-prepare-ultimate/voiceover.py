@@ -105,7 +105,7 @@ def cmd_voiceover(args):
             vlist = (app.get("vo", {}).get("voices") or {}).get(lang) or [v for v, _ in VOICE_ROTATION]
             vidx = (i + langs.index(lang)) % len(vlist)
             rate = app.get("vo", {}).get("rate", "+6%")
-            tfolder = L.iso_to_folder(lang); code = lang.upper()
+            tfolder = L.iso_to_english(lang); code = lang.upper()
             outdir = dst / f"VOICED_{tfolder}" / angle; outdir.mkdir(parents=True, exist_ok=True)
             out = outdir / f"{code}-VO_{ddmmnn}.mp4"
             jobs.append({"v": v, "lang": lang, "master": master, "cdur": cdur,

@@ -221,6 +221,13 @@ angle subfolder = ad set, .mp4 = ads):
 - **BGM-only** videos → `<dst>/BGM_UNIVERSAL/<angle>/MU_DDMMNN.mp4` (one universal
   campaign, language-agnostic — runs in every market, scale by swapping BGM).
 
+`<Language>` in the CAMPAIGN tree = the recognizable **English** name (`langmaps.iso_to_english`,
+e.g. `VOICED_Hindi`/`VOICED_Arabic`/`VOICED_Bengali`) — NOT the native-script autonym. (The
+SOURCE working tree at `--src` still uses autonym `<language_folder>/`, line ~92; only the deliverable
+campaign folders are English, since autonyms like हिन्दी/العربية are hard to read for upload. The
+`voiceover` step writes the same English `VOICED_<Language>/` folders, and `LANG_COUNTRIES` in the
+README map is keyed by these English names.)
+
 `brand_pass_video` **resizes/crops to exactly
 1080×1920 9:16**, strips side-blur, color-LUT jitter, watermark, outro, freeze-to-EOF
 end-card trim, fake metadata — **unique fingerprint per file** (Andromeda dedup

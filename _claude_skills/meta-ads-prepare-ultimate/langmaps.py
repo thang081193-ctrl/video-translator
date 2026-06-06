@@ -52,6 +52,34 @@ def iso_to_folder(code: str | None) -> str:
     return ISO_TO_FOLDER.get(code, f"Other_{code}")
 
 
+# ISO 639-1 -> recognizable ENGLISH language name. Used for CAMPAIGN folder labels
+# (VOICED_<English>) — the native-script autonyms above are hard to read in a
+# deliverable tree (हिन्दी / العربية / বাংলা). Source working folders keep autonyms.
+ISO_TO_ENGLISH = {
+    "en": "English", "vi": "Vietnamese", "pt": "Portuguese", "es": "Spanish",
+    "fr": "French", "de": "German", "it": "Italian", "ru": "Russian",
+    "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "th": "Thai",
+    "id": "Indonesian", "ar": "Arabic", "tr": "Turkish", "hi": "Hindi",
+    "nl": "Dutch", "pl": "Polish", "km": "Khmer", "ml": "Malayalam",
+    "my": "Burmese", "ne": "Nepali", "sw": "Swahili", "ta": "Tamil",
+    "te": "Telugu", "ur": "Urdu", "yo": "Yoruba", "bn": "Bengali",
+    "fa": "Persian", "uk": "Ukrainian", "ms": "Malay", "fil": "Filipino",
+    "tl": "Tagalog", "sv": "Swedish", "no": "Norwegian", "da": "Danish",
+    "fi": "Finnish", "el": "Greek", "he": "Hebrew", "cs": "Czech",
+    "ro": "Romanian", "hu": "Hungarian", "bg": "Bulgarian", "sr": "Serbian",
+    "hr": "Croatian", "sk": "Slovak", "sl": "Slovenian", "lt": "Lithuanian",
+    "lv": "Latvian", "et": "Estonian",
+}
+
+
+def iso_to_english(code: str | None) -> str:
+    """Campaign-folder label = recognizable English name (falls back to the autonym
+    folder, then Other_xx)."""
+    if not code:
+        return "Unknown"
+    return ISO_TO_ENGLISH.get(code) or ISO_TO_FOLDER.get(code, f"Other_{code}")
+
+
 def folder_to_code(folder: str) -> str | None:
     """Folder -> uppercase code. Falls back to Other_xx -> XX."""
     if folder in FOLDER_TO_CODE:

@@ -498,10 +498,9 @@ def cmd_brandpass(args):
                       f"(no dub outputs for {target_langs or 'any'})", flush=True)
                 continue
             for tlang in langs:
-                tfolder = L.iso_to_folder(tlang)
-                tcode = L.folder_to_code(tfolder) or tlang.upper()
+                tcode = L.folder_to_code(L.iso_to_folder(tlang)) or tlang.upper()
                 name = _target_name(v.get("renamed") or v["orig_name"], tcode)
-                out_path = dst / f"VOICED_{tfolder}" / ang / name
+                out_path = dst / f"VOICED_{L.iso_to_english(tlang)}" / ang / name
                 jobs.append(_mkjob(v, tlang, dubbed[tlang], out_path, True, seed))
                 seed_i += 1
         else:
@@ -567,20 +566,20 @@ def _probe_stream(video: Path) -> dict:
         return {"w": None, "h": None, "dur": 0, "has_audio": False, "err": str(e)}
 
 
-# native-script language folder -> the countries that VOICED campaign should target
+# English campaign-folder label -> the countries that VOICED campaign should target
 LANG_COUNTRIES = {
     "English": "US, UK, Canada, Australia, Ireland, New Zealand",
-    "Español": "Spain, Mexico, Argentina, Colombia, Chile",
-    "Français": "France, Belgium, Switzerland, Canada (QC)",
-    "Português": "Portugal, Brazil", "Deutsch": "Germany, Austria, Switzerland",
-    "Italiano": "Italy, Switzerland", "Polski": "Poland",
-    "Nederlands": "Netherlands, Belgium", "Türkçe": "Türkiye",
-    "日本語": "Japan", "한국어": "South Korea", "中文": "Taiwan, Hong Kong, Singapore",
-    "العربية": "Saudi Arabia, UAE, Qatar, Egypt", "हिन्दी": "India",
-    "বাংলা": "Bangladesh", "ગુજરાતી": "India (Gujarat)", "Tagalog": "Philippines",
-    "Indonesia": "Indonesia", "Tiếng Việt": "Vietnam", "ไทย": "Thailand",
-    "Magyar": "Hungary", "Ελληνικά": "Greece", "Українська": "Ukraine",
-    "Čeština": "Czechia", "Română": "Romania", "Русский": "(restricted on Meta)",
+    "Spanish": "Spain, Mexico, Argentina, Colombia, Chile",
+    "French": "France, Belgium, Switzerland, Canada (QC)",
+    "Portuguese": "Portugal, Brazil", "German": "Germany, Austria, Switzerland",
+    "Italian": "Italy, Switzerland", "Polish": "Poland",
+    "Dutch": "Netherlands, Belgium", "Turkish": "Türkiye",
+    "Japanese": "Japan", "Korean": "South Korea", "Chinese": "Taiwan, Hong Kong, Singapore",
+    "Arabic": "Saudi Arabia, UAE, Qatar, Egypt", "Hindi": "India",
+    "Bengali": "Bangladesh", "Gujarati": "India (Gujarat)", "Tagalog": "Philippines",
+    "Indonesian": "Indonesia", "Vietnamese": "Vietnam", "Thai": "Thailand",
+    "Hungarian": "Hungary", "Greek": "Greece", "Ukrainian": "Ukraine",
+    "Czech": "Czechia", "Romanian": "Romania", "Russian": "(restricted on Meta)",
 }
 
 
