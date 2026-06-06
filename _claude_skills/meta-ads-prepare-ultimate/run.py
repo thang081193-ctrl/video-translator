@@ -44,6 +44,7 @@ sys.path.insert(0, str(SKILL_DIR))
 import manifest as M  # noqa: E402
 import langmaps as L  # noqa: E402
 import countries as C  # noqa: E402
+import bgm_suggest as B  # noqa: E402
 
 REPO_ROOT = Path(os.environ.get("VIDEO_TRANSLATOR_ROOT", r"D:/Dev/Tools/Video Translator"))
 
@@ -81,9 +82,9 @@ def cmd_status(args):
         sys.exit("No manifest yet — run `scan` first.")
     voice = [v for v in vids if v.get("has_voice")]
     need_vert = [v["orig_name"] for v in vids if not v.get("vertical")]
-    need_meta = [v["orig_name"] for v in vids if not v.get("language_folder")]
-    need_angle = [v["orig_name"] for v in vids if not v.get("angle")]
-    need_copy = [v["orig_name"] for v in vids if not v.get("copy")]
+    need_meta = [v["orig_name"] for v in vids if v.get("vertical") != "skip" and not v.get("language_folder")]
+    need_angle = [v["orig_name"] for v in vids if v.get("vertical") != "skip" and not v.get("angle")]
+    need_copy = [v["orig_name"] for v in vids if v.get("vertical") != "skip" and not v.get("copy")]
     need_tr = [v["orig_name"] for v in voice
                if not v.get("segments") or any(not s.get("translations") for s in v.get("segments", []))]
     organized = [v for v in vids if v.get("renamed")]
@@ -131,7 +132,8 @@ def cmd_organize(args):
     if not vids:
         sys.exit("No manifest — run scan first.")
 
-    missing = [v["orig_name"] for v in vids if not v.get("language_folder")]
+    missing = [v["orig_name"] for v in vids
+               if v.get("vertical") != "skip" and not v.get("language_folder")]
     if missing:
         sys.exit(f"{len(missing)} videos missing language_folder (Opus must fill first): "
                  f"{', '.join(missing[:8])}...")
@@ -144,6 +146,8 @@ def cmd_organize(args):
     # source video's organized name.
     buckets: dict[str, list[dict]] = defaultdict(list)
     for v in vids:
+        if v.get("vertical") == "skip":
+            continue
         folder = v["language_folder"]
         code = v.get("lang_code") or L.folder_to_code(folder)
         if not code:
@@ -481,8 +485,11 @@ def cmd_brandpass(args):
         if not v.get("language_folder"):
             print(f"  SKIP-NOLANG {v['orig_name']}", flush=True); continue
         seed = (args.seed_base + seed_i) if args.seed_base else None
+        ang = (v.get("angle") or "other").strip() or "other"
         if v.get("has_voice"):
-            # One output per dubbed/localized language.
+            # One output per dubbed/localized language. Campaign tree:
+            #   <dst>/VOICED_<Language>/<angle>/CODE_DDMMNN.mp4
+            #   (folder = campaign, angle subfolder = ad set, .mp4 = ads)
             dubbed = v.get("dubbed_outputs") or {}
             langs = [l for l in dubbed if (not target_langs or l in target_langs)]
             if not langs:
@@ -493,14 +500,15 @@ def cmd_brandpass(args):
                 tfolder = L.iso_to_folder(tlang)
                 tcode = L.folder_to_code(tfolder) or tlang.upper()
                 name = _target_name(v.get("renamed") or v["orig_name"], tcode)
-                out_path = dst / tfolder / name
+                out_path = dst / f"VOICED_{tfolder}" / ang / name
                 jobs.append(_mkjob(v, tlang, dubbed[tlang], out_path, True, seed))
                 seed_i += 1
         else:
-            # Music-only: language-agnostic — ONE output in its source-lang folder.
+            # BGM-only: language-agnostic — ONE output in the universal campaign:
+            #   <dst>/BGM_UNIVERSAL/<angle>/MU_DDMMNN.mp4  (reusable in every market)
             inp = v.get("organized_path") or v["src_path"]
             name = v.get("renamed") or v["orig_name"]
-            out_path = dst / v["language_folder"] / name
+            out_path = dst / "BGM_UNIVERSAL" / ang / name
             jobs.append(_mkjob(v, "_", inp, out_path, False, seed))
             seed_i += 1
 
@@ -558,6 +566,52 @@ def _probe_stream(video: Path) -> dict:
         return {"w": None, "h": None, "dur": 0, "has_audio": False, "err": str(e)}
 
 
+# native-script language folder -> the countries that VOICED campaign should target
+LANG_COUNTRIES = {
+    "English": "US, UK, Canada, Australia, Ireland, New Zealand",
+    "Español": "Spain, Mexico, Argentina, Colombia, Chile",
+    "Français": "France, Belgium, Switzerland, Canada (QC)",
+    "Português": "Portugal, Brazil", "Deutsch": "Germany, Austria, Switzerland",
+    "Italiano": "Italy, Switzerland", "Polski": "Poland",
+    "Nederlands": "Netherlands, Belgium", "Türkçe": "Türkiye",
+    "日本語": "Japan", "한국어": "South Korea", "中文": "Taiwan, Hong Kong, Singapore",
+    "العربية": "Saudi Arabia, UAE, Qatar, Egypt", "हिन्दी": "India",
+    "বাংলা": "Bangladesh", "ગુજરાતી": "India (Gujarat)", "Tagalog": "Philippines",
+    "Indonesia": "Indonesia", "Tiếng Việt": "Vietnam", "ไทย": "Thailand",
+    "Magyar": "Hungary", "Ελληνικά": "Greece", "Українська": "Ukraine",
+    "Čeština": "Czechia", "Română": "Romania", "Русский": "(restricted on Meta)",
+}
+
+
+def _write_campaign_readme(out_dir: Path) -> None:
+    """Write 00_CAMPAIGNS_README.txt — a visual map of the campaign tree (folder =
+    campaign, angle subfolder = ad set, .mp4 = ads) + per-campaign target countries
+    + Meta setup + the BGM-swap scaling note."""
+    camps = sorted([p for p in out_dir.iterdir() if p.is_dir()
+                    and (p.name == "BGM_UNIVERSAL" or p.name.startswith("VOICED_"))],
+                   key=lambda p: (not p.name.startswith("BGM"), p.name))
+    L = ["META ADS — CAMPAIGN PACK",
+         "Folder = Campaign  |  angle subfolder = Ad Set  |  .mp4 = Ads", ""]
+    for c in camps:
+        adsets = sorted([s for s in c.iterdir() if s.is_dir()],
+                        key=lambda s: -len(list(s.glob("*.mp4"))))
+        total = sum(len(list(s.glob("*.mp4"))) for s in adsets)
+        if c.name == "BGM_UNIVERSAL":
+            tgt = "ALL markets (T1+T2, see countries.txt) — swap BGM per country to scale"
+        else:
+            tgt = LANG_COUNTRIES.get(c.name[len("VOICED_"):], c.name[len("VOICED_"):])
+        L.append(f"[{c.name}]  ({total} ads)  ->  {tgt}")
+        for s in adsets:
+            L.append(f"    {s.name:18} {len(list(s.glob('*.mp4')))}")
+        L.append("")
+    L += ["META SETUP: 1 Campaign per top folder (App Promotion / Advantage+); 1 Ad Set",
+          "per angle subfolder; upload the .mp4s inside as Ads. BGM_UNIVERSAL = workhorse.",
+          "",
+          "SCALE a new country: reuse BGM_UNIVERSAL (swap BGM to that country's trending",
+          "track, re-run brandpass --bgm-pool <pool>) + reuse/dub the matching VOICED_<lang>."]
+    (out_dir / "00_CAMPAIGNS_README.txt").write_text("\n".join(L), encoding="utf-8")
+
+
 def _copy_for(v: dict, lang: str) -> tuple[list, list]:
     """Localized (headlines, primary_texts) for a market language, with fallback
     to the legacy single-language fields when `copy` isn't filled per-lang."""
@@ -579,41 +633,52 @@ def cmd_package(args):
     out_dir = dst
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. creative_assets.csv — one row per (video, market language).
+    # 1a. creative_assets.csv — VOICED videos only, one row per (video, spoken lang).
+    #     These are language-SPECIFIC (the voiceover is in that language).
     assets = out_dir / "creative_assets.csv"
+    nvoiced = 0
     with open(assets, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["file", "language", "vertical", "angle", "hook", "headlines",
-                    "primary_texts", "bgm_cluster", "has_voice"])
+                    "primary_texts", "bgm_cluster"])
         for v in vids:
+            if not v.get("has_voice"):
+                continue
             outputs = v.get("outputs") or {}
+            langs = [l for l in outputs if l != "_"]
+            if target_langs:
+                langs = [l for l in langs if l in target_langs]
+            for lang in langs:
+                file_name = Path(outputs[lang]).name
+                headlines, primary = _copy_for(v, lang)
+                w.writerow([file_name, lang, v.get("vertical", ""),
+                            v.get("angle", ""), v.get("hook", ""),
+                            " | ".join(headlines), " | ".join(primary),
+                            v.get("bgm_cluster", "")])
+                nvoiced += 1
+    print(f"[package] voiced creative assets ({nvoiced}) -> {assets}", flush=True)
+
+    # 1b. bgm_only_assets.csv — language-AGNOSTIC BGM-only videos (in `_music/`).
+    #     One row each. REUSABLE across every market: to scale to a new country,
+    #     swap the BGM to that country's trending track (no re-dub, no re-classify).
+    #     `market_hint` = where the competitor originally ran it (reference only).
+    bgm_assets = out_dir / "bgm_only_assets.csv"
+    nbgm = 0
+    with open(bgm_assets, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["file", "vertical", "angle", "hook", "bgm_cluster",
+                    "market_hint", "reuse"])
+        for v in vids:
             if v.get("has_voice"):
-                # One row per localized language (keys are langs).
-                langs = [l for l in outputs if l != "_"]
-                if target_langs:
-                    langs = [l for l in langs if l in target_langs]
-                for lang in langs:
-                    file_name = Path(outputs[lang]).name
-                    headlines, primary = _copy_for(v, lang)
-                    w.writerow([
-                        file_name, lang, v.get("vertical", ""),
-                        v.get("angle", ""), v.get("hook", ""),
-                        " | ".join(headlines), " | ".join(primary),
-                        v.get("bgm_cluster", ""), "yes",
-                    ])
-            else:
-                # Music-only: one file, one row per market language.
-                file_name = Path(outputs.get("_", v.get("renamed") or v["orig_name"])).name
-                langs = target_langs or [v.get("language", "")]
-                for lang in langs:
-                    headlines, primary = _copy_for(v, lang)
-                    w.writerow([
-                        file_name, lang, v.get("vertical", ""),
-                        v.get("angle", ""), v.get("hook", ""),
-                        " | ".join(headlines), " | ".join(primary),
-                        v.get("bgm_cluster", ""), "no",
-                    ])
-    print(f"[package] creative assets -> {assets}", flush=True)
+                continue
+            outputs = v.get("outputs") or {}
+            file_name = Path(outputs.get("_", v.get("renamed") or v["orig_name"])).name
+            w.writerow([file_name, v.get("vertical", ""), v.get("angle", ""),
+                        v.get("hook", ""), v.get("bgm_cluster", ""),
+                        v.get("market_hint", "") or v.get("language", ""),
+                        "all markets — swap BGM per country"])
+            nbgm += 1
+    print(f"[package] BGM-only assets ({nbgm}) -> {bgm_assets}", flush=True)
 
     # 2. country targeting list
     extra = [c for c in (args.extra_countries or "").split(",") if c.strip()]
@@ -662,6 +727,10 @@ def cmd_package(args):
             print(f"[package] WARNING: {len(bgm_only)} music-only videos kept SOURCE BGM "
                   f"(no --bgm-pool). Risk of Meta copyright flag — swap to royalty-free.",
                   flush=True)
+
+    # 5. campaign README — visual map of the BGM_UNIVERSAL / VOICED_<lang> tree
+    _write_campaign_readme(out_dir)
+    print(f"[package] campaign README -> {out_dir / '00_CAMPAIGNS_README.txt'}", flush=True)
 
     if fails:
         print(f"\n[package] {fails} QA failures — review qa_report.csv before upload.", flush=True)
@@ -764,6 +833,14 @@ def main():
     p.add_argument("--east-eu", action="store_true")
     p.add_argument("--extra-countries", default="")
     p.set_defaults(func=cmd_package)
+
+    # bgm-suggest — trend-aware BGM advisor (location x language x content)
+    p = sub.add_parser("bgm-suggest",
+                       help="suggest trend-aware BGM per video -> bgm_suggestions.csv + shopping list")
+    p.add_argument("--src", required=True)
+    p.add_argument("--countries", default="", help="campaign target locations, e.g. US,FR,BR,SA")
+    p.add_argument("--write", action="store_true", help="write refined bgm_cluster back to manifest")
+    p.set_defaults(func=B.cmd_manifest)
 
     args = ap.parse_args()
     args.func(args)

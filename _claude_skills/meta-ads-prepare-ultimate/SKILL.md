@@ -24,10 +24,11 @@ angle, ad copy, translation, BGM cluster — all carried in one `manifest.json`.
 
 ```
 <src>/_ultimate/manifest.json     # the backbone — one entry per video
-run.py                            # orchestrator with 6 subcommands
+run.py                            # orchestrator with 8 subcommands
   manifest.py                     # Whisper-once scan + manifest IO + voice gate
   langmaps.py                     # ISO↔folder↔CODE maps (shared)
   countries.py                    # T1+T2 target-country tiers
+  bgm_suggest.py                  # trend-aware BGM advisor (location×language×content)
 ```
 
 Per-video manifest entry, and **which step fills each field**:
@@ -36,14 +37,15 @@ Per-video manifest entry, and **which step fills each field**:
 |---|---|---|
 | `duration, whisper_lang, has_voice, transcript, segments` | `scan` (Whisper ×1) | voice gate = avg_logprob > -0.5, speech ≥ max(1.5s, 5%) |
 | `vertical` | **Opus** | `hair` / `home` / `skip` — which app/vertical this video belongs to (the source folder mixes verticals) |
-| `language, language_folder, lang_code` | **Opus** | confirmed source language (Opus reads transcript, NOT the folder label) |
+| `language, language_folder, lang_code` | **Opus** | VOICED → spoken language (read transcript, NOT folder). BGM-only → `language_folder="_music"`, `lang_code="MU"` |
+| `bgm_only, market_hint` | **Opus** | `has_voice=False` → `bgm_only=true` + `market_hint` = the txt/on-screen market (reference only; the clip itself is language-agnostic) |
 | `angle, hook, bgm_cluster` | **Opus** | creative angle + which BGM mood cluster fits |
-| `copy` | **Opus** | `{iso: {headlines[], primary_texts[]}}` — localized copy **per target language** |
+| `copy` | **Opus** | `{iso: {headlines[], primary_texts[]}}` — localized copy (voiced: spoken lang; BGM-only: per-market at campaign time) |
 | `outro_variant` | **Opus** | `man` / `woman` for hair talking-heads (from the `framegrab` frame) → drives outro routing |
 | `segments[].translations` | **Opus** | `{iso: text}` — one translation per target language, for `has_voice` videos |
-| `renamed, organized_path` | `organize` | `CODE_DDMMNN.mp4` + source-lang location |
+| `renamed, organized_path` | `organize` | VOICED → `<lang>/CODE_DDMMNN.mp4`; BGM-only → `_music/MU_DDMMNN.mp4` |
 | `dubbed_outputs` | `dub` | `{iso: path}` — one dubbed mp4 per target language, in `<src>/<lang_folder>/` (voice videos only) |
-| `outputs` | `brandpass` | `{iso: path}` for voice (one per language) or `{"_": path}` for music-only (language-agnostic) |
+| `outputs` | `brandpass` | `{iso: path}` for voice (one per language, in `<lang>/`) or `{"_": path}` for BGM-only (in `_music/`) |
 
 ## The 6 steps
 
@@ -66,11 +68,25 @@ brand_pass speech-gate), `whisper_lang`, segments, duration. Idempotent — re-r
 only transcribe NEW videos and preserve Opus-filled fields.
 
 ### Step 2 — Opus fills the manifest (vertical + language + copy + translations + BGM)
+
+> ⚠️ **CARDINAL RULE — NEVER trust the source's pre-sorted split.** The source language
+> folders (`Deutsch/`, `English/`, `Unknown/`, …) and any pre-existing language/vertical
+> labels were sorted by an upstream tool that makes **REAL mistakes**: clips land in the
+> wrong language folder, `Unknown/` hides perfectly identifiable languages, and even a
+> "single-app" scrape can contain a different app. Treat the folder split as an
+> **UNRELIABLE HINT, never ground truth.** In this step, RE-READ every video's
+> `transcript` top-to-bottom (and a `framegrab` frame when the text is thin/ambiguous)
+> and re-derive `language` + `vertical` from the **actual content**, ignoring which folder
+> it came from. The `.txt` PRIMARY TEXT sidecar (if present) is corroborating evidence
+> only — it too can be mislabeled, so cross-check, don't blindly adopt it.
+
 Read `manifest.json`. For **every** video set:
-- `vertical`: `hair` / `home` / `skip` — classify which app/vertical the video belongs to (the source folder mixes verticals; `skip` = neither / unusable).
-- `language` (ISO, e.g. `vi`), `language_folder` (native script — see `langmaps.ISO_TO_FOLDER`, e.g. `Tiếng Việt`), `lang_code` (e.g. `VI`). **Determine language from the `transcript` content, NOT from the source folder name and NOT blindly from `whisper_lang`** — the folder/auto labels miss a lot. Trust your reading of the text.
+- `vertical`: `hair` / `home` / `skip` (or the app's own vertical name, e.g. `plant`) — classify which app/vertical the video belongs to **from the content, NOT the folder** (the source folder mixes verticals; `skip` = unrelated app / unusable).
+- **VOICED vs BGM-only routing — split by `has_voice` (the most important call):**
+  - `has_voice=True` → **language-SPECIFIC** (the voiceover IS in a language). Set `language` (ISO from the `transcript` CONTENT — NOT the folder, NOT blindly `whisper_lang`, see Cardinal Rule), `language_folder` (native script, `langmaps.ISO_TO_FOLDER`), `lang_code`. → organizes into `<language_folder>/CODE_DDMMNN.mp4`.
+  - `has_voice=False` → **language-AGNOSTIC** (no voiceover → the SAME clip runs in any market by just swapping the BGM). Set `language_folder="_music"`, `lang_code="MU"`, `bgm_only=true`, and `market_hint=<the txt/on-screen market, reference only>`. Do **NOT** assign a real language. → organizes into `_music/MU_DDMMNN.mp4`. ⛔ **NEVER dump voiceless videos into a language folder (esp. defaulting to English) — that's the old bug that buried reusable BGM clips and made country-scaling impossible** (you'd have to re-read every file to find them again).
 - `angle` (canonical creative angle), `hook` (the one-line hook).
-- `copy`: `{iso: {headlines:[...], primary_texts:[...]}}` — **localized copy in every target language** of this video's vertical (Step 0). Headlines ≤40 chars (Meta limit); front-load the hook in primary_texts. Localize, don't literal-translate.
+- `copy`: `{iso: {headlines:[...], primary_texts:[...]}}` — for **VOICED** videos, localized copy in the spoken language (+ any dub targets). For **BGM-only** videos copy is OPTIONAL here — it's generated per target market at campaign-build time (the clip is reusable), so leave it light. Headlines ≤40 chars (Meta limit); front-load the hook. Localize, don't literal-translate.
 - `bgm_cluster` (which `--bgm-pool` subfolder mood fits this video + its market, e.g. `B_indiepop`).
 
 For `has_voice` videos: fill `segments[].translations` = `{iso: text}` with **one translation per target language** (super-saiyan quality — preserve ad-hook punch, don't machine-translate). A target lang equal to the source language is skipped automatically (the original already carries that voice).
@@ -88,14 +104,49 @@ PYTHONIOENCODING=utf-8 "<PY>" -u "<SK>/run.py" framegrab --src "<folder>" --vert
 ```
 Extracts a frame at ~50% of each (voice) video into `<src>/_ultimate/_frames/<id>.jpg`. Opus then views the frames and sets each video's `outro_variant` = `man` / `woman`. Brandpass routes `--outro-man` / `--outro-woman` accordingly.
 
-### Step 3 — `organize` (move to language folders + rename)
+### Step 2c — `bgm-suggest` (trend-aware BGM advisor: location × language × content)
+Run AFTER Step 2 is filled (needs `language` + `angle` + `has_voice`), and BEFORE the
+user downloads BGM / before `brandpass --bgm-pool`. Tells the user exactly which
+trending royalty-free tracks to drop into each `--bgm-pool` cluster folder.
+```bash
+PYTHONIOENCODING=utf-8 "<PY>" "<SK>/run.py" bgm-suggest --src "<folder>" \
+    [--countries "US,FR,BR,SA"] [--write]
+```
+Reasons over the THREE axes the brief asks for, tuned to the **2026 short-form-ad meta**
+and the app's audience (plant / home-wellness IAA → cozy/calm/aesthetic; it deliberately
+steers AWAY from aggressive EDM / trap / dramatic orchestral):
+
+1. **Location** → regional music trend. Each video's region comes from its OWN language's
+   native market (anglo / west-eu / south-eu / nordics / east-eu / latam / mena / east-asia /
+   sea). `--countries` annotates campaign scope in the shopping list (per-video region still
+   follows language — correct for the keep-original-language flow).
+2. **Language** → the default region + (with `has_voice`) whether the track must be a
+   low-energy **instrumental bed** (ducked under VO, no vocal samples) vs a **music-only hero**
+   (trendier/hookier OK).
+3. **Content** → the creative `angle` maps to an energy bucket (calm / uplift / tension /
+   modern) → one of the four pool clusters (`C_lofi_chill` / `B_uplifting` / `A_calm_nature` /
+   `D_corporate`) + a BPM range.
+
+Writes into `<src>/_ultimate/`:
+- `bgm_suggestions.csv` — per video: file × language × angle × region × cluster × mood × bpm ×
+  Pixabay queries × trend note.
+- `bgm_shopping_list.md` — the deduped **download guide**: per cluster folder, grouped by region,
+  with ready-to-click Pixabay search links (free / no-attribution / commercial OK).
+
+`--write` also stamps the refined `bgm_cluster` back onto each manifest entry (so `brandpass
+--bgm-pool --bgm-mode by-mood` routes each video to the matching cluster). Standalone one-shot:
+`"<PY>" "<SK>/bgm_suggest.py" one --language fr --angle care-hack --countries FR [--voice]`.
+
+### Step 3 — `organize` (split voiced-by-language vs BGM-only, move + rename)
 ```bash
 PYTHONIOENCODING=utf-8 "<PY>" -u "<SK>/run.py" organize --src "<folder>" [--dry-run]
 ```
-Moves each video into `<folder>/<language_folder>/` and renames to
-`CODE_DDMMNN.mp4` (date from the original filename's `_YYYYMMDDT...` stamp, else
-mtime; sequence per language+date bucket). Always `--dry-run` first to eyeball the
-mapping. Carries `has_voice` forward.
+Moves each video into `<folder>/<language_folder>/` and renames to `<CODE>_DDMMNN.mp4`
+(date from the filename's `_YYYYMMDDT...` stamp, else mtime; global sequence per date
+bucket). Because Opus set `language_folder` per the voiced/BGM split in Step 2, this
+automatically lands **VOICED** videos in their language folder (`English/EN_040601.mp4`)
+and **BGM-only** videos in the language-agnostic group (`_music/MU_040603.mp4`) — no
+extra flags. Always `--dry-run` first. Carries `has_voice` forward.
 
 ### Step 4 — `dub` (voice videos only, multi-language, uses Opus translations)
 ```bash
@@ -123,10 +174,14 @@ PYTHONIOENCODING=utf-8 "<PY>" -u "<SK>/run.py" brandpass --src "<folder>" --dst 
     [--trim-endcard] [--bgm-pool "<pool>"] [--workers 4] [--seed-base 0]
 ```
 Only processes videos whose `vertical` matches `--vertical` (`skip` videos are always
-excluded). Each **voice** video produces **one output per dubbed language**
-(`<dst>/<lang_folder>/<LANG_CODE>_DDMMNN.mp4`); each **music-only** video is
-language-agnostic and produces **one** output in its source-lang folder (it runs in
-all of that vertical's markets). `brand_pass_video` **resizes/crops to exactly
+excluded). **Output is written directly as a Meta CAMPAIGN TREE** (folder = campaign,
+angle subfolder = ad set, .mp4 = ads):
+- **VOICED** videos → `<dst>/VOICED_<Language>/<angle>/<LANG_CODE>_DDMMNN.mp4` (one per
+  dubbed language; a per-language campaign that targets that language's countries).
+- **BGM-only** videos → `<dst>/BGM_UNIVERSAL/<angle>/MU_DDMMNN.mp4` (one universal
+  campaign, language-agnostic — runs in every market, scale by swapping BGM).
+
+`brand_pass_video` **resizes/crops to exactly
 1080×1920 9:16**, strips side-blur, color-LUT jitter, watermark, outro, freeze-to-EOF
 end-card trim, fake metadata — **unique fingerprint per file** (Andromeda dedup
 evasion). Outro routing: `--outro-man`/`--outro-woman` selected by the video's
@@ -147,16 +202,41 @@ Run **once per vertical**, matching the brandpass `--dst`:
     [--bgm-pool "<pool>"] [--east-eu] [--extra-countries "Taiwan,Singapore"]
 ```
 Writes into `<dst>`:
-- `creative_assets.csv` — **one row per (video, market language)**: file × language × vertical × angle × hook × localized headlines × localized primary_texts × bgm_cluster. Voice videos get one row per dubbed lang; music-only videos get one row per target market lang (same file). Group into ad sets by angle.
+- `creative_assets.csv` — **VOICED videos only**, one row per (video, spoken language): file × language × vertical × angle × hook × localized headlines × localized primary_texts × bgm_cluster. These are language-specific. Group into ad sets by angle.
+- `bgm_only_assets.csv` — **BGM-only videos** (the `_music/` group), one row each: file × angle × hook × bgm_cluster × `market_hint` × reuse-note. Language-AGNOSTIC — the same clip ships to every country; copy is written per market at campaign time.
 - `countries.txt` — T1+T2 targeting list (add `--east-eu` / `--extra-countries`).
-- `qa_report.csv` — per output (every language variant): dimensions==1080×1920, has-audio, duration>1 → PASS/FAIL. Exits non-zero if any FAIL.
-- **BGM license check** — warns if any music-only video kept SOURCE BGM (Meta copyright-flag risk; swap to a royalty-free Pixabay pool).
+- `qa_report.csv` — per output (voiced + BGM-only): dimensions==1080×1920, has-audio, duration>1 → PASS/FAIL. Exits non-zero if any FAIL.
+- `00_CAMPAIGNS_README.txt` — **visual map of the campaign tree** (each campaign + its angle ad-sets + ad counts + which countries to target + Meta setup + the BGM-swap scaling note). This is the human-readable index — open it instead of squinting at CSVs.
+- **BGM license check** — warns if any BGM-only video kept SOURCE BGM (Meta copyright-flag risk; swap to a royalty-free Pixabay pool).
 
 ## Waste eliminated vs. the old multi-skill flow
 - Whisper runs **once** (scan), not 3–4× (classify + detect_voice + translate-extract + brandpass each used to transcribe).
 - Voice/BGM detected in the same scan pass; carried as `has_voice` → brandpass reads it instead of re-detecting.
 - **Opus** does language ID + angle + copy + translation (no Gemini, no Whisper langid).
 - Only `has_voice` videos are translated/dubbed.
+
+## Scaling to a new country (why the voiced / BGM-only split matters)
+
+The whole point of separating `_music/` from the language folders is cheap country
+scaling. Two paths, by group:
+
+- **BGM-only videos (`_music/`, the bulk)** — language-agnostic. To launch in a new
+  country: **just swap the BGM** to that country's trending track and re-fingerprint —
+  NO re-classify, NO re-dub, NO Whisper. Re-run brandpass on `_music/` with a new
+  `--bgm-pool` (the new market's trend pool, see `bgm-suggest`):
+  ```bash
+  "<PY>" run.py brandpass --src "<folder>" --dst "<new_country_out>" \
+      --vertical <v> --bgm-pool "<NEW_country_bgm_pool>" --watermark ... --outro-video ...
+  ```
+  Because they live in one folder you can grab the entire reusable set instantly — you
+  never have to re-read files to find "which ones were music-only" (the old pain).
+- **Voiced videos (`<language>/`)** — language-specific. A new country that speaks a
+  NEW language needs a real dub: add the lang to Step 2 translations → `dub` → brandpass.
+  A new country that speaks an existing language (e.g. Austria↔Germany) reuses the
+  existing `Deutsch/` outputs as-is.
+
+So a typical "add Brazil" = reuse all `_music/` (swap to BR-trending BGM) + reuse
+`Português/` voiced outputs. "Add Japan" = reuse `_music/` (JP BGM) + dub voiced→ja.
 
 ## Notes & pitfalls
 - **CPU Whisper** is the default (this machine's CUDA fails inference — see memory). `small` is the speed/accuracy sweet spot.
