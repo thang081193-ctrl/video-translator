@@ -29,6 +29,7 @@ run.py                            # orchestrator with 8 subcommands
   langmaps.py                     # ISO↔folder↔CODE maps (shared)
   countries.py                    # T1+T2 target-country tiers
   bgm_suggest.py                  # trend-aware BGM advisor (location×language×content)
+  retrim_endcards.py              # strip outro/competitor end-cards by graphic-card (dom3) detection
 ```
 
 Per-video manifest entry, and **which step fills each field**:
@@ -49,8 +50,10 @@ Per-video manifest entry, and **which step fills each field**:
 
 ## The 6 steps
 
-Run via the project venv. `<PY>` = `D:/Dev/Tools/Video Translator/.venv/Scripts/python.exe`,
-`<SK>` = `C:/Users/Thang/.claude/skills/meta-ads-prepare-ultimate`.
+Run via the project Python. `<PY>` = `D:/Dev/Tools/Video Translator/.venv/Scripts/python.exe`
+(office PC) **OR** `C:/Users/Thang Dep Dai/AppData/Local/Programs/Python/Python313/python.exe`
+(home PC — no `.venv`; py313 already has faster-whisper/torch/demucs/edge-tts/cv2).
+`<SK>` = `C:/Users/Thang Dep Dai/.claude/skills/meta-ads-prepare-ultimate`.
 
 ### Step 0 — ASK the user upfront (before touching anything)
 Always collect these first; they drive the whole run:
@@ -244,7 +247,8 @@ So a typical "add Brazil" = reuse all `_music/` (swap to BR-trending BGM) + reus
 - If brand-pass robot-voices a talking-head: confirm `has_voice=True` in the manifest (the scan gate may mis-flag a testimonial buried under loud BGM — set it manually).
 - Headlines must be ≤40 chars (Meta truncates). Primary texts have more room but front-load the hook.
 - TW/SG are excluded from the default country core (need address verification) — add with `--extra-countries`.
-- Dependencies: project venv + `cv2` (side-blur), ffmpeg/ffprobe on PATH. Same as `meta-ads-prepare`.
+- **Outro / end-card gotcha:** `brand_pass_video` ALWAYS appends a generated outro card by default (a pink "Download Now" card) even with NO outro flags; and competitor end-cards are often animated, so the built-in `--trim-endcard` (freezedetect) misses them. **Fix:** after brandpass run **`"<PY>" retrim_endcards.py all "<dst>"`** — it strips BOTH (detects flat graphic cards by top-3 quantized-colour coverage, dom3 ≥ 0.55, bridging the competitor↔generated gap; max-trim guard 62% so graphic-promo-only ads aren't gutted). To then add the REAL outro: concat an outro mp4 (give it silent stereo audio, normalize both streams to 30fps). Root cause (outro default-on) is a deferred `brand_pass.py` fix (touches 337 tests).
+- Dependencies: project Python (py313 here) + `cv2` + `Pillow` (retrim card detect), ffmpeg/ffprobe on PATH. Same as `meta-ads-prepare`.
 
 ## Relationship to the older skills
 `meta-ads-prepare` (single brand-pass batch) still exists and is fine for a quick
