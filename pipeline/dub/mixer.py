@@ -160,6 +160,15 @@ def _mix_voice_and_bgm(
         bgm_vol = bgm_volume * cfg.dub.custom_bgm_multiplier
         voice_vol = cfg.dub.custom_voice_vol
 
+    # When the BGM is looped (`-stream_loop -1`) it is an INFINITE input, so
+    # amix=duration=longest would never reach EOF — ffmpeg would run until the
+    # subprocess timeout instead of finishing. Bound the mix to the first input
+    # (the finite voice track [0], padded to the video length upstream): the
+    # looped BGM fills exactly the voice/video duration and then stops.
+    # keep_original_bgm passes a finite, same-length BGM (loop_bgm=False) and
+    # wants it to play through any trailing non-speech, so it keeps `longest`.
+    mix_duration = "first" if loop_bgm else "longest"
+
     subprocess.run(
         [
             "ffmpeg", "-y",
@@ -168,7 +177,7 @@ def _mix_voice_and_bgm(
             "-filter_complex",
             f"[0]volume={voice_vol:.2f}[voice];"
             f"[1]volume={bgm_vol:.2f}[bg];"
-            f"[voice][bg]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit={cfg.dub.limiter_threshold}:level=false",
+            f"[voice][bg]amix=inputs=2:duration={mix_duration}:dropout_transition=0:normalize=0,alimiter=limit={cfg.dub.limiter_threshold}:level=false",
             "-c:a", "aac", "-b:a", cfg.dub.audio_bitrate,
             output_path,
         ],

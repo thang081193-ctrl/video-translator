@@ -1,4 +1,4 @@
-"""Tests for pipeline/convert.py — Reels preset, safe-zone layout, ffmpeg integration.
+"""Tests for pipeline/convert.py — Reels preset, max-content layout, ffmpeg integration.
 
 Unit tests cover the pure layout math (no ffmpeg). Integration test runs
 ffmpeg against a synthesized lavfi source — gated on ffmpeg being installed
@@ -14,12 +14,12 @@ import subprocess
 import pytest
 
 from pipeline.convert import (
+    FEED,
     REELS,
     PRESETS,
     Preset,
     _build_video_filter,
-    _fit_in_safe_zone,
-    _safe_zone_px,
+    _fit_to_canvas,
     convert_video,
     list_presets,
     verify_output,
@@ -38,89 +38,81 @@ class TestPresetRegistry:
         assert "reels" in PRESETS
         assert PRESETS["reels"] is REELS
 
+    def test_feed_in_presets(self):
+        assert "feed" in PRESETS
+        assert PRESETS["feed"] is FEED
+
     def test_reels_dimensions(self):
         assert REELS.width == 1080
         assert REELS.height == 1920
         assert REELS.fps == 30
+        assert REELS.fit_mode == "blur"
 
-    def test_reels_safe_zone_pcts(self):
-        # Meta Ads spec: top 14% (username), bottom 35% (caption + CTA)
-        assert REELS.top_reserve_pct == pytest.approx(0.14)
-        assert REELS.bottom_reserve_pct == pytest.approx(0.35)
+    def test_feed_dimensions(self):
+        assert FEED.width == 1080
+        assert FEED.height == 1350  # 4:5
+        assert FEED.fps == 30
+        assert FEED.fit_mode == "cover"
 
     def test_list_presets_ui_shape(self):
         presets = list_presets()
-        assert len(presets) >= 1
-        reels = next(p for p in presets if p["key"] == "reels")
-        assert reels["width"] == 1080
-        assert reels["height"] == 1920
-        assert "label" in reels
+        keys = {p["key"] for p in presets}
+        assert {"reels", "feed"} <= keys
+        for p in presets:
+            assert "label" in p
+            assert p["width"] == 1080
 
 
-# ─── Safe zone math ──────────────────────────────────────────────────────────
+# ─── Layout: _fit_to_canvas (max-content) ────────────────────────────────────
 
-class TestSafeZonePx:
-    def test_reels_safe_zone_pixels(self):
-        top, bottom, safe_h = _safe_zone_px(REELS)
-        assert top == int(1920 * 0.14)        # 268
-        assert bottom == int(1920 * 0.35)     # 672
-        assert safe_h == 1920 - top - bottom  # 980
-
-    def test_safe_zone_within_canvas(self):
-        top, bottom, safe_h = _safe_zone_px(REELS)
-        assert top + safe_h + bottom == REELS.height
-
-
-# ─── Layout: _fit_in_safe_zone ───────────────────────────────────────────────
-
-class TestFitInSafeZone:
-    def test_landscape_16_9_fits_to_safe_width(self):
-        """16:9 source (1920×1080) → fg fills safe_w=1080, height shrinks."""
-        fg_w, fg_h, x_off, y_off = _fit_in_safe_zone(1920, 1080, REELS)
+class TestFitToCanvas:
+    def test_landscape_16_9_fits_to_canvas_width(self):
+        """16:9 source → fg width = 1080 (full canvas), centered vertically."""
+        fg_w, fg_h, x_off, y_off = _fit_to_canvas(1920, 1080, REELS)
         assert fg_w == 1080
         # 1080 / (16/9) = 607.5 → snap-even → 606 or 608
         assert fg_h in (606, 608)
         assert x_off == 0
-        # y_off should bias content UP into safe zone (above canvas center)
-        canvas_center_y = REELS.height // 2  # 960
-        assert y_off < canvas_center_y, "Content must sit above canvas center for Reels Ads"
-
-    def test_landscape_position_in_safe_zone(self):
-        """Foreground for 16:9 must lie entirely within the safe zone."""
-        fg_w, fg_h, x_off, y_off = _fit_in_safe_zone(1920, 1080, REELS)
-        top, bottom, safe_h = _safe_zone_px(REELS)
-        assert y_off >= top, "Top of fg crosses into top reserve (username area)"
-        assert y_off + fg_h <= REELS.height - bottom, \
-            "Bottom of fg crosses into CTA area"
+        # y_off centers content vertically (no upward bias).
+        assert y_off == (REELS.height - fg_h) // 2
 
     def test_portrait_9_16_aspect_match_fills_canvas(self):
-        """Source already 9:16 → fg fills canvas, no safe-zone shrink."""
-        fg_w, fg_h, x_off, y_off = _fit_in_safe_zone(720, 1280, REELS)
-        # Aspect matches → content fills the canvas
+        """Source already 9:16 → fg fills canvas, no blur padding."""
+        fg_w, fg_h, x_off, y_off = _fit_to_canvas(720, 1280, REELS)
         assert (fg_w, fg_h) == (REELS.width, REELS.height)
         assert (x_off, y_off) == (0, 0)
 
-    def test_square_1_1_fits_safe_zone(self):
-        """1:1 source — taller than safe-zone aspect, fit to safe_h."""
-        fg_w, fg_h, x_off, y_off = _fit_in_safe_zone(1080, 1080, REELS)
-        _, _, safe_h = _safe_zone_px(REELS)
-        # Square is taller than safe-zone aspect (1080:980), fits to height
-        assert fg_h == safe_h - (safe_h % 2)
-        assert fg_w == fg_h  # square aspect preserved
-        assert x_off > 0     # pillarboxed
+    def test_square_1_1_fits_to_canvas_width(self):
+        """1:1 source — wider than 9:16, fit to canvas width 1080."""
+        fg_w, fg_h, x_off, y_off = _fit_to_canvas(1080, 1080, REELS)
+        assert fg_w == 1080
+        assert fg_h == 1080  # square preserved at canvas width
+        assert x_off == 0
+        # Centered vertically, blur fills 420px top + 420px bottom.
+        assert y_off == (REELS.height - fg_h) // 2
+
+    def test_portrait_4_5_fits_to_canvas_width(self):
+        """4:5 source (720×900) — taller than 1:1 but narrower than 9:16,
+        fit to full canvas width 1080. Old safe-zone code would have shrunk
+        this into 980px height — new max-content fills with 1350px height."""
+        fg_w, fg_h, x_off, y_off = _fit_to_canvas(720, 900, REELS)
+        assert fg_w == 1080
+        assert fg_h == 1350  # 1080 / (720/900)
+        assert x_off == 0
+        assert y_off == (REELS.height - fg_h) // 2  # 285
 
     def test_dimensions_always_even(self):
         """yuv420p needs even dimensions — composer must snap to even."""
         for src in [(1920, 1080), (1280, 720), (1081, 1921), (1080, 1080), (3840, 2160)]:
-            fg_w, fg_h, _, _ = _fit_in_safe_zone(src[0], src[1], REELS)
+            fg_w, fg_h, _, _ = _fit_to_canvas(src[0], src[1], REELS)
             assert fg_w % 2 == 0, f"fg_w={fg_w} for src={src} is odd"
             assert fg_h % 2 == 0, f"fg_h={fg_h} for src={src} is odd"
 
     def test_zero_dimensions_raises(self):
         with pytest.raises(FatalError, match="Invalid source dimensions"):
-            _fit_in_safe_zone(0, 1080, REELS)
+            _fit_to_canvas(0, 1080, REELS)
         with pytest.raises(FatalError, match="Invalid source dimensions"):
-            _fit_in_safe_zone(1920, 0, REELS)
+            _fit_to_canvas(1920, 0, REELS)
 
 
 # ─── Filter string composition ───────────────────────────────────────────────
@@ -142,15 +134,38 @@ class TestBuildVideoFilter:
         # End label
         assert f.endswith("[vout]")
 
-    def test_landscape_overlay_y_below_center(self):
-        """Verify the y-offset in the overlay command places content above canvas center."""
+    def test_landscape_overlay_y_centers_content(self):
+        """Max-content layout centers fg vertically — no safe-zone bias."""
         f = _build_video_filter(1920, 1080, REELS)
-        # filter looks like: ...overlay=0:454[vout]
         import re
         m = re.search(r"overlay=(\d+):(\d+)", f)
         assert m, f"no overlay xy in filter: {f}"
         x, y = int(m.group(1)), int(m.group(2))
-        assert y < REELS.height // 2, f"y={y} not biased upward (Reels safe zone)"
+        # fg height ~607, so y should be ~(1920 - 607) / 2 ≈ 656
+        canvas_center_y = REELS.height // 2
+        assert abs(y - (canvas_center_y - 303)) < 5, \
+            f"y={y} not centered (expected ~656)"
+
+    def test_feed_aspect_match_simple_scale(self):
+        """4:5 source → simple scale, no crop, no blur (FEED preset)."""
+        f = _build_video_filter(720, 900, FEED)
+        assert f == "[0:v]scale=1080:1350[vout]"
+
+    def test_feed_9_16_source_uses_cover_crop(self):
+        """9:16 source into 4:5 FEED → scale-to-cover + center-crop, no blur."""
+        f = _build_video_filter(720, 1280, FEED)
+        # Cover-mode filter is single-pass — no [bg]/[fg] overlay, no boxblur.
+        assert "boxblur" not in f, "Feed cover mode must not blur"
+        assert "[fg]" not in f and "[bg]" not in f, "Feed must not letterbox"
+        assert "force_original_aspect_ratio=increase" in f
+        assert "crop=1080:1350" in f
+        assert f.endswith("[vout]")
+
+    def test_feed_landscape_source_also_covers(self):
+        """16:9 source into 4:5 FEED → still cover mode (crops sides)."""
+        f = _build_video_filter(1920, 1080, FEED)
+        assert "boxblur" not in f
+        assert "crop=1080:1350" in f
 
 
 # ─── PipelineParams validation ───────────────────────────────────────────────

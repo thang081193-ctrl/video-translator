@@ -1,14 +1,23 @@
-"""Video conversion to platform presets (Reels, etc.).
+"""Video conversion to platform presets (Reels, Feed).
 
 Re-encodes the source video to a target preset's resolution + bitrate so
-the output is upload-ready for Meta Ads. Uses a blur-pad layout that places
-content within the Reels safe zone — top 14% (username/menu) and bottom 35%
-(caption + CTA) are reserved, so subtitles and text stay visible after Meta
-overlays its UI on the ad.
+the output is upload-ready for Meta Ads. Layout rule: maximize content.
+
+Each preset picks ONE of two non-matching-aspect strategies:
+
+- **blur** (Reels default): fit the source at maximum size into the canvas;
+  blur-pad fills only the unavoidable gap on the short axis. We do NOT shrink
+  content into a smaller safe zone.
+- **cover** (Feed default): scale source to cover the canvas, then center-crop
+  to target aspect. Loses the symmetric edge slices, but content fills the
+  canvas with no blur strips. Right choice when target aspect is shorter than
+  source (e.g. 9:16 → 4:5) — Meta would crop those edges anyway on Feed.
+
+Aspect-matching sources fill the canvas edge-to-edge under either strategy.
 
 Runs FIRST in the pipeline (before transcribe/translate/burn) so downstream
 stages — OCR detection, drawtext positioning, subtitle burning — all operate
-in the target Reels coordinate space.
+in the target preset's coordinate space.
 """
 
 from __future__ import annotations
@@ -28,7 +37,7 @@ log = get_logger("Convert")
 
 @dataclass(frozen=True)
 class Preset:
-    """Convert preset — target dimensions + encoding spec + safe zone."""
+    """Convert preset — target dimensions + encoding spec + fit strategy."""
     name: str
     width: int
     height: int
@@ -36,8 +45,7 @@ class Preset:
     video_bitrate: str
     audio_bitrate: str
     max_file_size_mb: int
-    top_reserve_pct: float = 0.14
-    bottom_reserve_pct: float = 0.35
+    fit_mode: str = "blur"  # "blur" (fit + blur-pad) | "cover" (scale + center-crop)
 
 
 REELS = Preset(
@@ -48,9 +56,21 @@ REELS = Preset(
     video_bitrate="8M",
     audio_bitrate="128k",
     max_file_size_mb=1000,
+    fit_mode="blur",  # source rarely taller than 9:16 → blur-pad short axis
 )
 
-PRESETS: dict[str, Preset] = {"reels": REELS}
+FEED = Preset(
+    name="feed",
+    width=1080,
+    height=1350,
+    fps=30,
+    video_bitrate="8M",
+    audio_bitrate="128k",
+    max_file_size_mb=1000,
+    fit_mode="cover",  # 9:16 sources → center-crop top/bottom (no blur strips)
+)
+
+PRESETS: dict[str, Preset] = {"reels": REELS, "feed": FEED}
 
 
 def list_presets() -> list[dict]:
@@ -61,8 +81,7 @@ def list_presets() -> list[dict]:
             "name": p.name,
             "width": p.width,
             "height": p.height,
-            "label": f"Reels ({p.width}×{p.height})" if k == "reels"
-                     else f"{p.name.capitalize()} ({p.width}×{p.height})",
+            "label": f"{p.name.capitalize()} ({p.width}×{p.height})",
         }
         for k, p in PRESETS.items()
     ]
@@ -70,20 +89,13 @@ def list_presets() -> list[dict]:
 
 # ─── Layout ─────────────────────────────────────────────────────────────────
 
-def _safe_zone_px(preset: Preset) -> tuple[int, int, int]:
-    """Return (top_reserve_px, bottom_reserve_px, safe_h_px) for the preset."""
-    top = int(preset.height * preset.top_reserve_pct)
-    bottom = int(preset.height * preset.bottom_reserve_pct)
-    return top, bottom, preset.height - top - bottom
-
-
-def _fit_in_safe_zone(src_w: int, src_h: int, preset: Preset) -> tuple[int, int, int, int]:
+def _fit_to_canvas(src_w: int, src_h: int, preset: Preset) -> tuple[int, int, int, int]:
     """Compute foreground placement (fg_w, fg_h, x_off, y_off).
 
-    When source aspect matches target — content fills the full canvas
-    (matching aspect means user already shot for vertical, no need to
-    shrink into safe zone). Otherwise letterbox/pillarbox into the safe
-    zone so Meta's bottom CTA doesn't cover the content.
+    Maximizes content: fits source at the largest size that fits inside
+    the full 1080×1920 canvas. Aspect-matching sources fill the canvas
+    edge-to-edge. Non-matching sources still use the full long axis —
+    blur-pad only fills the unavoidable gaps on the short axis.
     """
     if src_h == 0 or src_w == 0:
         raise FatalError(f"Invalid source dimensions: {src_w}×{src_h}")
@@ -91,45 +103,50 @@ def _fit_in_safe_zone(src_w: int, src_h: int, preset: Preset) -> tuple[int, int,
     src_ar = src_w / src_h
     target_ar = preset.width / preset.height
 
-    # Aspect match (within 2%) — fill canvas
     if abs(src_ar - target_ar) / target_ar < 0.02:
         return preset.width, preset.height, 0, 0
 
-    top, _, safe_h = _safe_zone_px(preset)
-    safe_w = preset.width
-    safe_ar = safe_w / safe_h
-
-    if src_ar > safe_ar:
-        # Wider than safe zone — fit to safe width
-        fg_w = safe_w
-        fg_h = round(safe_w / src_ar)
+    if src_ar > target_ar:
+        # Source wider than 9:16 — fit to canvas width, pad top/bottom.
+        fg_w = preset.width
+        fg_h = round(preset.width / src_ar)
     else:
-        # Taller than safe zone — fit to safe height
-        fg_h = safe_h
-        fg_w = round(safe_h * src_ar)
+        # Source taller/narrower than 9:16 — fit to canvas height, pad sides.
+        fg_h = preset.height
+        fg_w = round(preset.height * src_ar)
 
     # Snap to even (yuv420p needs even dims)
     fg_w -= fg_w % 2
     fg_h -= fg_h % 2
 
     x_off = (preset.width - fg_w) // 2
-    y_off = top + (safe_h - fg_h) // 2
+    y_off = (preset.height - fg_h) // 2
 
     return fg_w, fg_h, x_off, y_off
 
 
 def _build_video_filter(src_w: int, src_h: int, preset: Preset) -> str:
     """Build the ffmpeg filter_complex chain for the convert step."""
-    fg_w, fg_h, x_off, y_off = _fit_in_safe_zone(src_w, src_h, preset)
-    tw, th = preset.width, preset.height
+    if src_h == 0 or src_w == 0:
+        raise FatalError(f"Invalid source dimensions: {src_w}×{src_h}")
 
-    # Aspect match — fg fills the canvas; no blur background needed
-    if fg_w == tw and fg_h == th:
+    tw, th = preset.width, preset.height
+    src_ar = src_w / src_h
+    target_ar = tw / th
+
+    # Aspect match — simple scale, no padding, no crop.
+    if abs(src_ar - target_ar) / target_ar < 0.02:
         return f"[0:v]scale={tw}:{th}[vout]"
 
-    # Background: scale to cover, crop, blur. Foreground: scale to fit safe
-    # zone preserving aspect. Composite with x/y offset that biases content
-    # upward into the Reels Ads safe zone.
+    if preset.fit_mode == "cover":
+        # Scale to cover canvas, then center-crop to target. No blur.
+        return (
+            f"[0:v]scale={tw}:{th}:force_original_aspect_ratio=increase,"
+            f"crop={tw}:{th}[vout]"
+        )
+
+    # blur fit-mode (default): max-content + boxblur background.
+    fg_w, fg_h, x_off, y_off = _fit_to_canvas(src_w, src_h, preset)
     return (
         f"[0:v]scale={tw}:{th}:force_original_aspect_ratio=increase,"
         f"crop={tw}:{th},boxblur=20:5[bg];"
@@ -145,10 +162,11 @@ def convert_video(
     output_path: str,
     preset: Preset = REELS,
 ) -> str:
-    """Convert input video to preset resolution + safe-zone layout.
+    """Convert input video to preset resolution + max-content layout.
 
     Re-encodes h264 + aac at preset bitrate, snaps to preset.fps cap,
-    and faststart-flags the MP4 so it streams on Meta upload.
+    and faststart-flags the MP4 so it streams on Meta upload. The fit
+    strategy (blur-pad vs center-crop) is governed by `preset.fit_mode`.
     """
     check_ffmpeg()
 
@@ -163,7 +181,7 @@ def convert_video(
 
     log.info(
         f"Convert {src_w}×{src_h} → {preset.width}×{preset.height} "
-        f"({preset.name}, blur-pad, safe-zone offset)"
+        f"({preset.name}, max-content layout)"
     )
 
     cmd = ["ffmpeg", "-y", "-i", input_path]
