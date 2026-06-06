@@ -45,6 +45,7 @@ import manifest as M  # noqa: E402
 import langmaps as L  # noqa: E402
 import countries as C  # noqa: E402
 import bgm_suggest as B  # noqa: E402
+import voiceover as VO  # noqa: E402
 
 REPO_ROOT = Path(os.environ.get("VIDEO_TRANSLATOR_ROOT", r"D:/Dev/Tools/Video Translator"))
 
@@ -841,6 +842,20 @@ def main():
     p.add_argument("--countries", default="", help="campaign target locations, e.g. US,FR,BR,SA")
     p.add_argument("--write", action="store_true", help="write refined bgm_cluster back to manifest")
     p.set_defaults(func=B.cmd_manifest)
+
+    # voiceover — generate AI voiceover for BGM-only clips -> localized VOICED ads
+    p = sub.add_parser("voiceover",
+                       help="add AI voiceover (Edge-TTS) to BGM-only clips per language")
+    p.add_argument("--src", required=True)
+    p.add_argument("--dst", required=True)
+    p.add_argument("--app-config", required=True, help="app.json (app_name, cta, usp, ...)")
+    p.add_argument("--vo-bank", required=True, help="vo_bank JSON {lang:{angle:{short,long}}}")
+    p.add_argument("--target-langs", required=True, help="e.g. en,es,fr,pt")
+    p.add_argument("--vertical", default=None)
+    p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--concurrency", type=int, default=0,
+                   help="parallel jobs (0=auto, ~half the CPU cores; render runs at below-normal priority)")
+    p.set_defaults(func=VO.cmd_voiceover)
 
     args = ap.parse_args()
     args.func(args)

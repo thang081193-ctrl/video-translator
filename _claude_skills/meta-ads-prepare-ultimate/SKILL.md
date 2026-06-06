@@ -24,12 +24,15 @@ angle, ad copy, translation, BGM cluster — all carried in one `manifest.json`.
 
 ```
 <src>/_ultimate/manifest.json     # the backbone — one entry per video
-run.py                            # orchestrator with 8 subcommands
+run.py                            # orchestrator with 9 subcommands
   manifest.py                     # Whisper-once scan + manifest IO + voice gate
   langmaps.py                     # ISO↔folder↔CODE maps (shared)
   countries.py                    # T1+T2 target-country tiers
   bgm_suggest.py                  # trend-aware BGM advisor (location×language×content)
   retrim_endcards.py              # strip outro/competitor end-cards by graphic-card (dom3) detection
+  voiceover.py                    # AI voiceover (Edge-TTS) for BGM-only clips -> localized VOICED ads
+app.json                          # PER-APP config (app_name, cta, usp, voices) — app-agnostic
+vo_bank_<vertical>.json           # per-vertical VO scripts {lang:{angle:{short,long}}}, {app} placeholder
 ```
 
 Per-video manifest entry, and **which step fills each field**:
@@ -167,6 +170,40 @@ DDMMNN suffix is reused so all language variants pair up by sequence. Pass the
 the langs it actually has translations for, so hair (it/fr/pt) and home (fr/id/pt)
 both resolve from one `--target-langs it,fr,pt,id` call. BGM-only videos are skipped
 (no dub needed). Skip this step entirely if not translating.
+
+### Step 4b — `voiceover` (OPTIONAL — AI voiceover for BGM-only clips → localized VOICED ads)
+Run AFTER brandpass (it adds VO to the finished BGM_UNIVERSAL clips). Turns the
+language-AGNOSTIC B-roll into engaging **voiced** ads per language — a voiceover pitch
+converts far better for IAA than music alone. The BGM-only masters are KEPT (reusable);
+this just derives voiced versions.
+```bash
+PYTHONIOENCODING=utf-8 "<PY>" -u "<SK>/run.py" voiceover --src "<folder>" --dst "<dst>" \
+    --app-config "<app.json>" --vo-bank "<vo_bank_plant.json>" \
+    --target-langs en,es,fr,pt,de,ar,hi,zh,ru,id [--vertical plant] [--limit N] [--concurrency N]
+```
+Per BGM-only clip × target language:
+1. **Script** = `vo_bank[lang][angle][short|long]` (`short` for clips <22s, `long` for ≥22s),
+   with `{app}` / `{cta}` filled from `app.json`. **Opus authors `vo_bank`** (app-pitch, B-roll
+   style — sells the app, doesn't narrate the specific visual, so one script fits every clip of
+   that angle). Headlines of a script ≈ hook → USP → CTA, sized to the duration tier.
+2. **Edge-TTS** with the **NATIVE voice per language**, from `app.json` → `vo.voices[lang]` (a LIST
+   per language, rotated within the language for variety — e.g. `ar`→Saudi/Egyptian, `hi`→Indian,
+   `bn`→Bangla, `es`→ES/MX). EN uses the 4 expressive multilingual voices (Ava/Emma/Andrew/Brian);
+   any unmapped lang falls back to those 4. **Native voices avoid the American accent** the
+   multilingual voices give to AR/HI/BN. Each call **retries + rotates to the next voice** on a
+   transient Edge "no audio" blip so a flaky call never leaves a gap. Rate from `vo.rate` (default +6%).
+3. **Fit**: if the TTS is longer than the clip, `atempo` up to 1.18×; the `vo_bank` short/long tiers
+   keep this minimal.
+4. **Mix**: duck the clip's BGM to 0.30, overlay the VO at 1.7 (`amix normalize=0`), VO delayed 0.3s.
+   No Demucs (the clip has no existing voice). Video is stream-copied (fast).
+   **Parallel + polite:** jobs run at bounded concurrency (`--concurrency`, default ≈ half the CPU
+   cores) with each ffmpeg at `-threads 1` and **below-normal priority**, so a full render (1500+
+   clips) finishes in ~1h without starving foreground apps. Re-running is idempotent (same names).
+→ writes `<dst>/VOICED_<Language>/<angle>/<LANG>-VO_DDMMNN.mp4` (the `-VO_` prefix distinguishes
+generated voiceover ads from natively-voiced `<LANG>_DDMMNN`). Records `vo_outputs{lang:path}`.
+**App-agnostic:** swap `app.json` (any app) + the matching `vo_bank_<vertical>.json` (plant/hair/…) —
+same engine. Voice quality ceiling: Edge multilingual is good + free; ElevenLabs is the paid
+near-human upgrade (32 langs) for winning angles.
 
 ### Step 5 — `brandpass` (per-vertical, resize 9:16 + fingerprint + watermark/outro + BGM swap)
 Run **once per vertical** (different `--dst` + brand assets + outro per app):
