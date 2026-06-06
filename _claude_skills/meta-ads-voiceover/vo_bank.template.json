@@ -1,0 +1,31 @@
+{
+  "_note": "Copy to <App>/vo_bank_<vertical>.json. Shape: { lang: { angle: { short, long } } }. short=clips<22s, long=clips>=22s. Use {app} (also {cta},{tagline}) placeholders. Opus (this chat) AUTHORS every script as a B-roll app PITCH (hook->USP->CTA) — one script fits every clip of that angle. Author EN first, then localize idiomatically to each target language (NOT machine translation). Angle keys MUST match the manifest's angles. The 'en' block below is a worked example (plant vertical) — replace the copy for your vertical, keep the structure.",
+  "en": {
+    "care-hack": {
+      "short": "Caring for your plants shouldn't feel like guessing. With {app}, just scan any plant to know exactly what it is, and get simple care tips made just for it. Try {app}, free.",
+      "long": "Caring for plants shouldn't feel like guessing. With {app}, just point your camera at any plant and instantly know what it is. Then get simple, personalized care tips, exactly how much water and light it needs, and when. {app} even reminds you, so you never forget again. From a total beginner to a confident plant parent. Download {app} today, free on the App Store and Google Play."
+    },
+    "how-to-scan": {
+      "short": "Ever spotted a plant and wondered what it is? Now you can know in seconds. Just open {app}, point your camera, and the AI identifies any plant, flower, or leaf instantly. Try {app}, free.",
+      "long": "Ever spotted a plant and wondered what it is? Now you can know in seconds. Just open {app}, point your camera, and let the AI identify any plant, flower, or leaf instantly. But it doesn't stop there. {app} spots diseases early, tells you exactly how much water and light your plant needs, and sends gentle reminders. From total beginner to confident plant parent. Download {app} today, free on the App Store and Google Play."
+    },
+    "feature-demo": {
+      "short": "{app} is more than a plant identifier. Scan to name any plant, diagnose diseases from a photo, and get a personalized care plan with reminders, all in one app. Try {app}, free.",
+      "long": "{app} is so much more than a plant identifier. Snap a photo to instantly name any plant. Diagnose diseases and pests before they spread. Get a personalized care plan with watering and light reminders made just for your plant. And join millions of plant lovers worldwide. Everything your plants need, in one app. Download {app} today, free on the App Store and Google Play."
+    },
+    "beginner": {
+      "short": "New to plants? {app} makes it easy. Just snap a photo to identify any plant and get simple, beginner-friendly care tips. Keep every plant alive and thriving. Download {app}, free.",
+      "long": "New to plants and scared of killing them? {app} makes it easy. Just snap a photo to identify any plant, and get simple, beginner-friendly care tips, watering, light, feeding, everything. No green thumb required. {app} even reminds you exactly when to water. Keep every plant alive and thriving, from day one. Download {app} today, free on the App Store and Google Play."
+    },
+    "diagnosis-rescue": {
+      "short": "Is your plant looking sick, droopy, or turning yellow? Just scan it with {app}, and in seconds the AI tells you what's wrong and how to fix it. Bring your plant back to life. Download {app}, free.",
+      "long": "Is your plant looking sick, droopy, or turning yellow? Don't wait until it's too late. Just scan it with {app}, and in seconds the AI tells you exactly what's wrong, and how to fix it. From yellow leaves and dry soil to root rot and pests, you'll get a simple, step-by-step rescue plan, using what you already have at home. No more guessing, no more dead plants. Bring your plant back to life. Download {app} today, free on the App Store and Google Play."
+    }
+  },
+  "es": {
+    "care-hack": {
+      "short": "Cuidar tus plantas no debería ser adivinar. Con {app}, escanea cualquier planta para saber exactamente qué es y recibe consejos de cuidado a su medida. Prueba {app}, gratis.",
+      "long": "[localize the EN 'long' here — idiomatic native ad copy, not literal. Repeat this block for every angle, then add a block per target language.]"
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "_note": "Copy to <App>/app.json and fill. {app}=app_name in vo_bank scripts. vo.voices = NATIVE Edge voice LIST per language (rotated within the lang). EN uses the 4 multilingual voices; everything else uses native voices so AR/HI/BN don't sound American. Trim vo.voices to only the languages you actually render.",
+  "app_name": "YourApp",
+  "vertical": "plant",
+  "tagline": "One-line value prop",
+  "usp": [
+    "primary benefit in a few words",
+    "second benefit",
+    "third benefit"
+  ],
+  "cta": "Try YourApp",
+  "store": "Free on the App Store & Google Play",
+  "audience": "who this app is for",
+  "assets": {
+    "logo": "Logo.png",
+    "outro": "outro.mp4",
+    "watermark": "Logo.png",
+    "bgm_pool": "_bgm_pool"
+  },
+  "vo": {
+    "engine": "edge",
+    "style": "warm, friendly, conversational",
+    "rate": "+6%",
+    "voices": {
+      "en": ["en-US-AvaMultilingualNeural", "en-US-EmmaMultilingualNeural", "en-US-AndrewMultilingualNeural", "en-US-BrianMultilingualNeural"],
+      "es": ["es-ES-ElviraNeural", "es-MX-DaliaNeural", "es-ES-AlvaroNeural", "es-MX-JorgeNeural"],
+      "pt": ["pt-BR-FranciscaNeural", "pt-BR-AntonioNeural", "pt-BR-BrendaNeural"],
+      "fr": ["fr-FR-DeniseNeural", "fr-FR-HenriNeural", "fr-FR-EloiseNeural"],
+      "de": ["de-DE-KatjaNeural", "de-DE-ConradNeural", "de-DE-AmalaNeural"],
+      "it": ["it-IT-ElsaNeural", "it-IT-DiegoNeural", "it-IT-IsabellaNeural"],
+      "pl": ["pl-PL-ZofiaNeural", "pl-PL-MarekNeural"],
+      "id": ["id-ID-GadisNeural", "id-ID-ArdiNeural"],
+      "hi": ["hi-IN-SwaraNeural", "hi-IN-MadhurNeural"],
+      "ar": ["ar-SA-ZariyahNeural", "ar-EG-SalmaNeural", "ar-SA-HamedNeural"],
+      "bn": ["bn-BD-NabanitaNeural", "bn-BD-PradeepNeural", "bn-IN-TanishaaNeural"],
+      "tr": ["tr-TR-EmelNeural", "tr-TR-AhmetNeural"],
+      "ru": ["ru-RU-SvetlanaNeural", "ru-RU-DmitryNeural"],
+      "ja": ["ja-JP-NanamiNeural", "ja-JP-KeitaNeural"],
+      "ko": ["ko-KR-SunHiNeural", "ko-KR-InJoonNeural"],
+      "zh": ["zh-CN-XiaoxiaoNeural", "zh-CN-YunxiNeural"],
+      "th": ["th-TH-PremwadeeNeural", "th-TH-NiwatNeural"],
+      "vi": ["vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural"],
+      "nl": ["nl-NL-ColetteNeural", "nl-NL-MaartenNeural"]
+    }
+  }
+}
