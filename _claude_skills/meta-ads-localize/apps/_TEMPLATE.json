@@ -1,0 +1,10 @@
+{
+  "app_name": "<Store display name, e.g. 'AI Home Design: DecoAI'>",
+  "brand_title": "<short brand shown on outro, e.g. 'DecoAI'>",
+  "brand_sub": "<tagline, e.g. 'Redesign Any Room in Seconds'>",
+  "logo": "<abs path to logo PNG (>=512px)>",
+  "outro_video": "<abs path to 1080x1920 brand outro mp4 (~3-5s), or '' to skip outro>",
+  "play_url": "<Play Store / App Store URL — used to understand the value prop for ad copy>",
+  "value_prop": "<1-3 sentences: what the app does + what its ads sell. Drives the ad copy.>",
+  "default_geo": { "fr": "France", "tr": "Türkiye", "za": "South Africa", "en": "United States" }
+}
