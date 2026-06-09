@@ -14,7 +14,11 @@ from PIL import Image
 from concurrent.futures import ThreadPoolExecutor, as_completed
 CARD_THRESH = 0.55  # top-3 quantized-color coverage; card 0.71-0.78 vs content 0.20-0.41
 
-DST = sys.argv[2] if len(sys.argv) > 2 else r"D:\Dev\App Details\Plant Identifier\video\0506"
+# DST is resolved in __main__ from argv via argparse — NO destructive default here.
+# (Footgun fix: a stray/empty arg like `--help` must never fall through to an
+# in-place trim of some hard-coded folder.)
+DST = None
+TEST_SAMPLE_ROOT = r"D:\Dev\App Details\Plant Identifier\video\0506"  # only `test` mode samples
 FPS = 4
 
 def dur_of(v):
@@ -97,7 +101,21 @@ def process(v, replace, testdir=None):
         return (v,"trimmed",ce,dur)
 
 if __name__ == "__main__":
-    mode = sys.argv[1] if len(sys.argv)>1 else "test"
+    import argparse
+    ap = argparse.ArgumentParser(prog="retrim_endcards.py",
+        description="Trim the trailing pink end-card (competitor 'Download Now' + the "
+                    "pipeline's auto outro card) from finished outputs, by colour.")
+    ap.add_argument("mode", choices=["test", "all"],
+        help="test = 6 sample clips -> _retrim_test/ (no overwrite); "
+             "all = trim EVERY .mp4 under <dst> IN PLACE")
+    ap.add_argument("dst", nargs="?", default=None,
+        help="campaign-tree dir. REQUIRED for 'all' (in-place) — there is no default, so a "
+             "stray arg like --help can never nuke a folder.")
+    args = ap.parse_args()
+    mode = args.mode
+    if mode == "all" and not args.dst:
+        ap.error("'all' trims IN PLACE — pass an explicit <dst> dir (refusing to use a default).")
+    DST = args.dst or TEST_SAMPLE_ROOT
     if mode == "test":
         td = r"C:\Users\Thang Dep Dai\Downloads\_retrim_test"; os.makedirs(td, exist_ok=True)
         samples = ["English/EN_040601","Deutsch/DE_0506008","Español/ES_0506001",
