@@ -206,13 +206,32 @@ OPUS_FIELDS = ("vertical", "language", "language_folder", "lang_code",
                "bgm_cluster", "outro_variant")
 
 
-def scan(src_root: Path, model_size: str = "small") -> dict:
+def scan(src_root: Path, model_size: str = "small",
+         skip_processed: bool = False) -> dict:
     """Build/refresh the manifest. Idempotent: re-transcribes only NEW videos,
-    preserves Opus-filled fields and any existing translations."""
+    preserves Opus-filled fields and any existing translations.
+
+    skip_processed: ignore files that already carry a pipeline signature
+    (an earlier full run stamped them) so a re-run never re-Whispers / re-processes
+    already-finished deliverables. See signature.is_processed.
+    """
     data = load_manifest(src_root)
     existing = index_by_id(data)
     videos = collect_videos(src_root)
     print(f"[scan] {len(videos)} videos under {src_root}", flush=True)
+
+    if skip_processed:
+        import signature as _SIG
+        kept, skipped = [], 0
+        for mp4 in videos:
+            if _SIG.is_processed(mp4):
+                skipped += 1
+            else:
+                kept.append(mp4)
+        if skipped:
+            print(f"[scan] skip-processed: ignoring {skipped} already-signed "
+                  f"file(s); {len(kept)} remain", flush=True)
+        videos = kept
 
     todo = []
     for mp4 in videos:

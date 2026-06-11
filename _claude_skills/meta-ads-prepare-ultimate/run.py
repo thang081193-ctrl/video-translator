@@ -46,6 +46,7 @@ import langmaps as L  # noqa: E402
 import countries as C  # noqa: E402
 import bgm_suggest as B  # noqa: E402
 import voiceover as VO  # noqa: E402
+import signature as SIG  # noqa: E402
 
 REPO_ROOT = Path(os.environ.get("VIDEO_TRANSLATOR_ROOT", r"D:/Dev/Tools/Video Translator"))
 
@@ -57,8 +58,56 @@ def cmd_scan(args):
     src = Path(args.src).resolve()
     if not src.is_dir():
         sys.exit(f"src not a directory: {src}")
-    data = M.scan(src, model_size=args.whisper)
+    data = M.scan(src, model_size=args.whisper,
+                  skip_processed=getattr(args, "skip_processed", False))
     _print_fill_instructions(src, data)
+
+
+# ----------------------------------------------------------------------------
+# signature — recognize / mark already-processed files
+# ----------------------------------------------------------------------------
+def cmd_signature(args):
+    """Mark processed videos with a hidden mp4 signature, or check coverage.
+
+    --mark stamps every *.mp4 under --src (skips _* work folders) so a later
+    `scan --skip-processed` ignores them. --check (default) reports how many
+    already carry a signature and lists the unmarked ones.
+    """
+    src = Path(args.src).resolve()
+    if not src.is_dir():
+        sys.exit(f"src not a directory: {src}")
+    vids = M.collect_videos(src)
+    if not vids:
+        sys.exit(f"no .mp4 under {src}")
+
+    if args.mark:
+        sig = SIG.build(app=args.app, batch=args.batch, extra=args.note)
+        print(f"[signature] stamping {len(vids)} file(s): {sig}", flush=True)
+        ok = fail = 0
+        for v in vids:
+            good, err = SIG.stamp(v, sig)
+            if good:
+                ok += 1
+            else:
+                fail += 1
+                print(f"  FAIL {v.name} :: {err}", flush=True)
+        print(f"[signature] marked OK={ok} FAIL={fail}", flush=True)
+        if fail:
+            sys.exit(1)
+        return
+
+    # default: check
+    marked = [v for v in vids if SIG.is_processed(v)]
+    unmarked = [v for v in vids if v not in marked]
+    print(f"[signature] {len(marked)}/{len(vids)} already processed; "
+          f"{len(unmarked)} unmarked", flush=True)
+    if marked:
+        ex = SIG.read_comment(marked[0])
+        print(f"  example tag: {ex}", flush=True)
+    for v in unmarked[:40]:
+        print(f"  UNMARKED  {v.relative_to(src)}", flush=True)
+    if len(unmarked) > 40:
+        print(f"  ... +{len(unmarked) - 40} more", flush=True)
 
 
 def _print_fill_instructions(src: Path, data: dict):
@@ -535,6 +584,22 @@ def cmd_brandpass(args):
                 print(f"    {vid}: {msg}", flush=True)
     M.merge_save(src, data["videos"], ("outputs",))
     print(f"\n[brandpass] ok={ok} skip={skip} err={err} time={(time.time()-t0)/60:.1f}m", flush=True)
+
+    # Stamp the processed signature so a later `scan --skip-processed` skips these.
+    # Outputs (deliverables) get provenance; sources are marked done too.
+    if not getattr(args, "no_sign", False):
+        app = want_vertical or "meta_ads"
+        sig = SIG.build(app=app, extra=f"step=brandpass")
+        sok = 0
+        for v in data.get("videos", []):
+            for op in (v.get("outputs") or {}).values():
+                if op and Path(op).exists() and SIG.stamp(op, sig)[0]:
+                    sok += 1
+            srcp = v.get("organized_path") or v.get("src_path")
+            if srcp and Path(srcp).exists():
+                SIG.stamp(srcp, sig)
+        print(f"[brandpass] signature stamped on {sok} output(s) + sources", flush=True)
+
     if fails:
         sys.exit(1)
 
@@ -784,6 +849,9 @@ def main():
     p = sub.add_parser("scan"); p.add_argument("--src", required=True)
     p.add_argument("--whisper", default="small",
                    choices=["tiny", "base", "small", "medium", "large-v3"])
+    p.add_argument("--skip-processed", action="store_true",
+                   help="ignore files already carrying a pipeline signature "
+                        "(see `signature`) — never re-Whisper a finished file")
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("status"); p.add_argument("--src", required=True)
@@ -823,6 +891,8 @@ def main():
     p.add_argument("--bgm-pool", default=None)
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--seed-base", type=int, default=0)
+    p.add_argument("--no-sign", action="store_true",
+                   help="do NOT stamp the processed signature onto outputs/sources")
     p.set_defaults(func=cmd_brandpass)
 
     p = sub.add_parser("package")
@@ -855,6 +925,18 @@ def main():
     p.add_argument("--concurrency", type=int, default=0,
                    help="parallel jobs (0=auto, ~half the CPU cores; render runs at below-normal priority)")
     p.set_defaults(func=VO.cmd_voiceover)
+
+    # signature — recognize / mark already-processed files (skip re-runs)
+    p = sub.add_parser("signature",
+                       help="mark processed videos with a hidden mp4 tag, or "
+                            "check coverage (so `scan --skip-processed` skips them)")
+    p.add_argument("--src", required=True)
+    p.add_argument("--mark", action="store_true",
+                   help="stamp every mp4 under --src (default: just check)")
+    p.add_argument("--app", default="", help="app label for the tag prefix, e.g. decoai")
+    p.add_argument("--batch", default="", help="batch id for the tag, e.g. 2805")
+    p.add_argument("--note", default="", help="extra key=val appended to the tag")
+    p.set_defaults(func=cmd_signature)
 
     args = ap.parse_args()
     args.func(args)

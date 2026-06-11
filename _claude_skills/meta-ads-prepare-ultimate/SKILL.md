@@ -24,13 +24,14 @@ angle, ad copy, translation, BGM cluster — all carried in one `manifest.json`.
 
 ```
 <src>/_ultimate/manifest.json     # the backbone — one entry per video
-run.py                            # orchestrator with 9 subcommands
+run.py                            # orchestrator with 10 subcommands
   manifest.py                     # Whisper-once scan + manifest IO + voice gate
   langmaps.py                     # ISO↔folder↔CODE maps (shared)
   countries.py                    # T1+T2 target-country tiers
   bgm_suggest.py                  # trend-aware BGM advisor (location×language×content)
   retrim_endcards.py              # strip outro/competitor end-cards by graphic-card (dom3) detection
   voiceover.py                    # AI voiceover (Edge-TTS) for BGM-only clips -> localized VOICED ads
+  signature.py                    # hidden mp4 tag = "already processed" (skip on re-runs)
 app.json                          # PER-APP config (app_name, cta, usp, voices) — app-agnostic
 vo_bank_<vertical>.json           # per-vertical VO scripts {lang:{angle:{short,long}}}, {app} placeholder
 ```
@@ -67,11 +68,17 @@ Always collect these first; they drive the whole run:
 
 ### Step 1 — `scan` (Whisper runs ONCE here, never again)
 ```bash
-PYTHONIOENCODING=utf-8 "<PY>" -u "<SK>/run.py" scan --src "<folder>" [--whisper small]
+PYTHONIOENCODING=utf-8 "<PY>" -u "<SK>/run.py" scan --src "<folder>" [--whisper small] [--skip-processed]
 ```
 Builds `manifest.json`: per video → transcript (native lang), `has_voice` (the
 brand_pass speech-gate), `whisper_lang`, segments, duration. Idempotent — re-runs
 only transcribe NEW videos and preserve Opus-filled fields.
+
+**`--skip-processed`**: ignore any mp4 that already carries a pipeline signature
+(a hidden mp4 `comment` tag stamped by a prior run — see *Processed-file
+signature* below). Use it when a folder is partly/fully finished already so the
+scan never re-Whispers / re-processes deliverables that are done. Files without a
+tag are scanned as usual.
 
 ### Step 2 — Opus fills the manifest (vertical + language + copy + translations + BGM)
 
@@ -255,6 +262,39 @@ Writes into `<dst>`:
 - `qa_report.csv` — per output (voiced + BGM-only): dimensions==1080×1920, has-audio, duration>1 → PASS/FAIL. Exits non-zero if any FAIL.
 - `00_CAMPAIGNS_README.txt` — **visual map of the campaign tree** (each campaign + its angle ad-sets + ad counts + which countries to target + Meta setup + the BGM-swap scaling note). This is the human-readable index — open it instead of squinting at CSVs.
 - **BGM license check** — warns if any BGM-only video kept SOURCE BGM (Meta copyright-flag risk; swap to a royalty-free Pixabay pool).
+
+## Processed-file signature (recognize done work, skip on re-runs)
+
+Every full run **stamps a hidden mp4 `comment` tag** into each output (and source)
+so a later run can tell "this is already finished" and skip it — no double
+watermark, no wasted Whisper hours, no re-encode (the tag is written by
+**stream-copy + atomic temp-replace**, so a finished deliverable is byte-identical
+video, it just gains a provenance atom). Lives in `signature.py`.
+
+**Tag format** (pipe-delimited, in the container `comment` atom):
+```
+<APP>_PROCESSED|batch=<b>|brandpassed=yes|tool=meta-ads-ultimate|date=YYYY-MM-DD|<extra>
+```
+Read it back with: `ffprobe -v error -show_entries format_tags=comment -of default=nw=1:nk=1 <file>`.
+Recognition is loose + backward-compatible: a file counts as processed if the
+comment contains `PROCESSED` **or** `tool=meta-ads-ultimate` (so legacy
+`DECOAI_PROCESSED|...` tags still match).
+
+**Automatic** — `brandpass` stamps every output + source at the end of its run
+(disable with `--no-sign`). **`scan --skip-processed`** then ignores any file that
+already carries the tag, so re-running the pipeline on a partly-finished folder
+only touches the new files.
+
+**Manual `signature` subcommand** — for folders processed outside this skill
+(e.g. already brand-passed elsewhere) or to audit a folder:
+```bash
+# check: report how many files are already tagged + show an example tag + list untagged
+"<PY>" "<SK>/run.py" signature --src "<folder>"
+# mark: stamp every mp4 under <folder> as processed
+"<PY>" "<SK>/run.py" signature --src "<folder>" --mark [--app decoai] [--batch 2805] [--note "step=bgmswap"]
+```
+Use `--mark` when deliverables were finished by an earlier/external pass so future
+`scan --skip-processed` runs recognize and skip them.
 
 ## Waste eliminated vs. the old multi-skill flow
 - Whisper runs **once** (scan), not 3–4× (classify + detect_voice + translate-extract + brandpass each used to transcribe).
