@@ -104,6 +104,8 @@ Run via batch wrapper: `scripts/batch_brand_pass_fancam.py` with `--workers 2` (
 
 Output: `_branded/<AngleFolder>/<LangFolder>/<ANGLE>_<LANG>_<MMDD><NN>.mp4` — all 1080×1920, all unique fingerprints, all branded with app's logo + name + tagline.
 
+**Voice Audibility (auto):** voiced sources get the measured voice-first mix — voice −16 LUFS, BGM 11–14 dB under, post-mix `VOICEMIX` gate (never pass `bgm_volume=`, that's the legacy ungated mix). Audit voiced deliverables before upload: `python "<skills-dir>/meta-ads-prepare/qa_voice_mix.py" "_branded" --sample 10 --whisper --expect-voice`. Spec: meta-ads-prepare SKILL.md → "Voice Audibility QA".
+
 **Time estimate**: ~40-80s per video on consumer CPU. For 300+ videos at 2 workers: 2-3 hours. ASK USER BEFORE KICKING OFF.
 
 Known fails + retry: 1-3% videos fail with empty Whisper transcript → recover with fallback transcript. See [meta-ads-prepare pitfalls](../meta-ads-prepare/SKILL.md#common-pitfalls--how-to-recover).

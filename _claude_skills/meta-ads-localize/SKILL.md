@@ -96,6 +96,13 @@ The high-level flow and the *why*:
    - `scripts/apply_dub.py --root <folder> --langs fr,tr` → Edge-TTS in the target voice
      over the original Demucs-separated BGM, mux, **append the brand outro video**, output
      `<ANGLE>/<LANG>/...`.
+   - **Voice Audibility (auto + audit):** the dub mixer loudness-measures both tracks and
+     auto-cuts the BGM whenever the projected voice margin drops under 8 dB
+     (`cfg.dub.min_voice_margin_db`, log `VOICEMIX`) — a hot source BGM can no longer drown
+     the dub. Before upload, audit the deliverables:
+     `python "<skills-dir>/meta-ads-prepare/qa_voice_mix.py" "<folder>" --sample 10 --whisper --expect-voice`
+     (0 whisper words on a dubbed file = voice drowned/missing → FAIL). Full spec:
+     meta-ads-prepare SKILL.md → "Voice Audibility QA".
 
 6. **DO NOT auto-trim end-cards.** The scene-change detector false-positives on
    continuous-VO walkthroughs (it flags a mid-video scene cut as an "end-card" and would

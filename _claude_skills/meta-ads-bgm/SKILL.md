@@ -35,8 +35,10 @@ names so `brandpass --bgm-pool <pool> --bgm-mode by-mood` routes each clip to it
 ## The one rule that most affects quality: voiced vs music-only
 
 - **VOICED clips** (have a voiceover — `VOICED_*` campaigns): pick the **calmer, more instrumental**
-  option in the cluster. The track is a *bed* that sits UNDER the voice (ducked ~0.25–0.3), so a
-  busy vocal-sample track fights the VO. No vocals, gentle movement.
+  option in the cluster. The track is a *bed* that sits UNDER the voice — the pipeline
+  loudness-normalizes it 11–14 dB below the voice automatically (measured mix, see
+  meta-ads-prepare → "Voice Audibility QA"), so master loudness doesn't matter when picking;
+  but a busy vocal-sample track still fights the VO *spectrally*. No vocals, gentle movement.
 - **Music-only clips** (`BGM_UNIVERSAL`, no voice): pick the **catchiest / hookiest** track — here
   the music IS the hero that stops the scroll. Trendier, bigger drop, vocal chops OK.
 

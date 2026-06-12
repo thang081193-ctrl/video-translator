@@ -54,6 +54,10 @@ PYTHONIOENCODING=utf-8 "<video-translator>/.venv/Scripts/python.exe" -u apply.py
   - Calls `pipeline.dub.dub_video` to merge dubbed audio over the original video.
   - Writes to `out_path` (default `<root>/_translated_en/<angle_slug>/<stem>_EN.mp4`).
 - Entries with any missing `translation_en` are skipped with `SKIP-INCOMPLETE` log.
+- **Voice Audibility (auto):** `build_dubbed_audio`'s mixer measures both tracks and auto-cuts
+  the BGM when the projected voice margin is under 8 dB (`VOICEMIX` log) — the dub can't be
+  drowned by a hot source BGM. Audit output before shipping:
+  `python "<skills-dir>/meta-ads-prepare/qa_voice_mix.py" "<root>/_translated_en" --whisper --expect-voice`.
 
 ## Translation guidelines (for the LLM in chat)
 
