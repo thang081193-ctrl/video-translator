@@ -11,8 +11,9 @@ Two caps gate a batch:
 
 The estimate takes max(keys_for_rpm, keys_for_rpd) and adds 1 for safety
 margin (retries, alignment loss). Numbers come from
-`pipeline.quota.MODEL_RATE_LIMITS` — verified against Google's published
-limits and observed 429 responses on 2026-05.
+`pipeline.quota.MODEL_RATE_LIMITS` — RPD values verified against real 429
+quota payloads (2026-05: flash-lite enforced at 20/day despite docs saying
+1000; gemini-2.0-flash has no free tier at all).
 
 Usage from CLI:
     python -m pipeline.capacity --videos 56 --langs 3
@@ -103,6 +104,10 @@ def estimate_keys_needed(
     limits = model_limits(model)
     rpm_cap = limits["rpm"]
     rpd_cap = limits["rpd"]
+    if rpd_cap <= 0:
+        raise ValueError(
+            f"{model} has no free-tier daily quota (RPD=0) — pick a gemini-2.5 model"
+        )
 
     batches_per_video = max(1, math.ceil(avg_segments / batch_size))
     calls_per_video = batches_per_video * langs

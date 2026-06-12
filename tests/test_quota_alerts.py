@@ -35,8 +35,12 @@ def client():
 
 class TestRateSpikeDetection:
     def test_normal_rate_does_not_trigger(self):
-        """10 requests over 60s = ~10 RPM — well below threshold."""
-        for _ in range(10):
+        """Just under the live spike threshold → no spike alert.
+
+        SPIKE_RPM_THRESHOLD resolves from the active model's RPM cap, so
+        derive the request count from it instead of hardcoding (a 10-RPM
+        model alerts at 9; flash-lite at 18)."""
+        for _ in range(quota.SPIKE_RPM_THRESHOLD - 1):
             quota.record_request("AIzaTest_Key1234")
         alerts = quota.get_recent_alerts()
         spike_alerts = [a for a in alerts if a["type"] == "spike"]
@@ -44,7 +48,7 @@ class TestRateSpikeDetection:
 
     def test_spike_above_threshold_fires_alert(self):
         """Burst above SPIKE_RPM_THRESHOLD within window → spike alert."""
-        # SPIKE_RPM_THRESHOLD is 30; fire 31 requests rapidly
+        # Threshold resolves live from the active model's RPM cap
         for _ in range(quota.SPIKE_RPM_THRESHOLD + 1):
             quota.record_request("AIzaTest_Key1234")
         alerts = quota.get_recent_alerts()

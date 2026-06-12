@@ -1,8 +1,9 @@
 """Free-tier quota tracking for Gemini API.
 
-Free tier limit is 1,000 requests/day per project (per key) on Flash-Lite/Flash.
-Tracks per-key daily counts, resets at midnight Pacific (Google's reset time),
-and emits warnings at 80% / 95% / 100% to keep the user inside free-tier ($0).
+Daily limits are per-PROJECT and per-MODEL (see MODEL_RATE_LIMITS — e.g.
+flash 250 RPD but flash-lite only 20 RPD). Tracks per-key daily counts,
+resets at midnight Pacific (Google's reset time), and emits warnings at
+80% / 95% / 100% to keep the user inside free-tier ($0).
 
 State is persisted to `_quota_state.json` at project root so counts survive
 process restarts. Log lines tagged "[QUOTA]" so they're easy to grep / surface
@@ -21,17 +22,18 @@ from pipeline.logger import get_logger
 
 log = get_logger("Quota")
 
-# ─── Google Gemini free-tier rate limits (per project, verified 2026-05) ────
-# Source: https://ai.google.dev/gemini-api/docs/rate-limits + observed 429s.
-# Each project gets one bucket — even with many keys on the same project they
-# share the cap. Add new GCP projects (no billing) to scale linearly.
+# ─── Google Gemini free-tier rate limits (per project, per model) ───────────
+# Docs: https://ai.google.dev/gemini-api/docs/rate-limits — but published RPD
+# lags enforcement. Real limits come from 429 payloads: trigger one and read
+# `quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier` + `limit`
+# (docs claimed 1000 RPD for flash-lite; enforced limit observed 2026-05-11
+# is 20). Each project gets one bucket — even with many keys on the same
+# project they share the cap. Add new GCP projects (no billing) to scale.
 MODEL_RATE_LIMITS: dict[str, dict[str, int]] = {
-    "gemini-2.5-flash-lite": {"rpm": 20,  "tpm": 250_000, "rpd": 1000},
-    "gemini-2.5-flash":      {"rpm": 10,  "tpm": 250_000, "rpd": 250},
-    "gemini-2.5-pro":        {"rpm": 5,   "tpm": 250_000, "rpd": 100},
-    # Older models if anyone still wires them up — safe fallback assumes
-    # the most restrictive tier that's still plausible.
-    "gemini-2.0-flash":      {"rpm": 15,  "tpm": 1_000_000, "rpd": 200},
+    "gemini-2.5-flash-lite": {"rpm": 20,  "tpm": 250_000,   "rpd": 20},   # 429 says limit: 20
+    "gemini-2.5-flash":      {"rpm": 10,  "tpm": 250_000,   "rpd": 250},  # observed — use for batches
+    "gemini-2.5-pro":        {"rpm": 5,   "tpm": 250_000,   "rpd": 100},
+    "gemini-2.0-flash":      {"rpm": 15,  "tpm": 1_000_000, "rpd": 0},    # 429 says limit: 0 — NO free tier
 }
 DEFAULT_MODEL = "gemini-2.5-flash-lite"
 
@@ -55,15 +57,12 @@ def daily_limit_for(model: str | None = None) -> int:
     return model_limits(model)["rpd"]
 
 
-# Backwards-compat: legacy code imports DAILY_LIMIT_FREE directly. Keep it
-# pointing at the default model so old call sites stay correct.
-DAILY_LIMIT_FREE = MODEL_RATE_LIMITS[DEFAULT_MODEL]["rpd"]
 WARN_THRESHOLD = 0.80
 CRITICAL_THRESHOLD = 0.95
 
 # Suspicious activity detection — must stay BELOW the actual RPM cap so we
-# alert before Google starts 429ing. Default model is flash-lite (20 RPM);
-# sustained 18+ RPM in a 60s window means something is approaching the cap.
+# alert before Google starts 429ing. Threshold derives from the ACTIVE
+# model's RPM (e.g. flash at 10 RPM → alert at sustained 9+ in 60s).
 SPIKE_WINDOW_SEC = 60
 _SPIKE_RPM_HEADROOM = 0.9  # alert at 90% of model cap
 SPIKE_REPEAT_COOLDOWN_SEC = 120  # Don't re-fire same alert more than once per 2min
@@ -83,8 +82,16 @@ def _spike_threshold() -> int:
     return max(1, int(rpm * _SPIKE_RPM_HEADROOM))
 
 
-# Backwards-compat constant for any caller still importing this name.
-SPIKE_RPM_THRESHOLD = _spike_threshold()
+# Legacy aliases — DAILY_LIMIT_FREE / SPIKE_RPM_THRESHOLD predate per-model
+# limits. Resolved live (PEP 562) instead of snapshotted at import, so a
+# GEMINI_MODEL override can't strand them at the default model's caps while
+# record_request() enforces the configured model's.
+def __getattr__(name: str):
+    if name == "DAILY_LIMIT_FREE":
+        return daily_limit_for()
+    if name == "SPIKE_RPM_THRESHOLD":
+        return _spike_threshold()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 _lock = threading.Lock()
 _STATE_PATH = Path(__file__).resolve().parent.parent / "_quota_state.json"
