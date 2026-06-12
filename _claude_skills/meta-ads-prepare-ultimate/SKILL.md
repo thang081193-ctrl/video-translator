@@ -250,6 +250,8 @@ Audio routing is driven by the manifest, NOT re-detected:
 
 **Critical efficiency:** the manifest `transcript` is passed into `brand_pass_video(transcript=...)`, so **brand-pass does NOT run Whisper again** (brand_pass.py skips its internal transcription when `transcript` is provided).
 
+**BGM smart start + end-card v2 (automatic):** every `--bgm-pool` replacement opens on the track's best sustained section instead of a quiet intro (`BGMSTART` log line), and `--trim-endcard` uses reverse frame-matching v2 (animated-card aware, multi-card, 12 fps refine) — details in meta-ads-prepare SKILL.md.
+
 **Voice Audibility QA (automatic):** every voiced render uses the measured voice-first mix — voice normalized to −16 LUFS, BGM 11–14 dB below the voice, post-mix LUFS gate (`DegradedError` instead of shipping a drowned mix). Each file logs one `VOICEMIX … MEASURED` line — grep the run log to audit a batch. NEVER pass `bgm_volume=` (legacy blind mix, ungated). After rendering, audit the deliverables: `python "<skills-dir>/meta-ads-prepare/qa_voice_mix.py" "<dst>" --sample 10 --whisper --expect-voice` on the `VOICED_*` folders. Full spec: meta-ads-prepare SKILL.md → "Voice Audibility QA".
 
 ### Step 6 — `package` (per-vertical creative assets + countries + QA gate + license check)

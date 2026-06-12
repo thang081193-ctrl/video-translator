@@ -13,7 +13,7 @@ Batch wrapper around `pipeline.brand_pass.brand_pass_video` from the Video Trans
 
 1. **Voice/BGM routing (pre-step)** — classify each source as voiced vs music-only with `detect_voice.py` BEFORE batching, then route deliberately. The pipeline's auto-decide silently re-dubs ANY voiced file with a male TTS voice, which ruins UGC/testimonials. See "Voice/BGM routing — classify BEFORE batching".
 2. **Audio handling — three modes** — (a) TTS re-dub, (b) **keep original voice** over new BGM (`keep_original_voice=True`, Demucs isolates the vocals stem — no robot voice), (c) music-only passthrough/replace (`transcript=""`). See "Speech handling".
-3. **End-card trim — freeze-to-EOF** — removes the competitor's static outro card via a freeze segment that runs to EOF, NOT scene-detect. Catches soft fades into a card without over-trimming a testimonial that ends on a low-motion shot. See "End-card detection".
+3. **End-card trim — reverse frame-matching v2** — removes the competitor's outro by matching tail frames against the FINAL frame: catches animated CTAs freezedetect misses, walks multi-card outros to the first card, refines the cut at 12 fps, and refuses gentle boundaries (no over-trimming testimonials). See "End-card detection".
 
 ## When to use
 - Re-brand a batch of ads (any aspect) into 9:16 Reels.
@@ -37,7 +37,7 @@ Caveat: the gate is conservative — a testimonial buried under loud BGM can be 
 
 ## Per-video pipeline (in order)
 
-1. **End-card auto-trim** (`--trim-endcard`) — **freeze-detect primary**, scene-detect fallback. Finds the static outro card the video ENDS on (robust to soft fades that scene-detect misses), with a transition guard so a held talking-head shot isn't mistaken for a card. See "End-card detection".
+1. **End-card auto-trim** (`--trim-endcard`) — **reverse frame-matching v2 primary** (tail frames vs final frame, multi-card aware, 12 fps boundary refine), freeze-detect only when v2 can't run. Catches animated cards, refuses settling shots. See "End-card detection".
 2. **Speech detection** — Whisper-small on source audio, per-segment filter `text.strip() AND avg_logprob > -0.5`, total speech ≥ `max(1.5s, 5% of video)`. Decides voice path vs music-only path. See "Speech handling" for why this threshold.
 3. **Audio path A — TTS re-dub (default, voice present)**: Demucs htdemucs separates source BGM → Edge TTS reads transcript on top of BGM, **measured voice-first mix**: voice normalized to −16 LUFS, BGM placed 11–14 dB (jittered) BELOW the voice, post-mix LUFS QA gate. See "Voice Audibility QA".
    **Audio path A' — Keep original voice** (`keep_original_voice=True`): Demucs isolates the source *vocals* stem and mixes the original talking-head voice over new BGM (`--bgm-pool` track or the source's own no_vocals stem) — NO TTS, same measured mix + gate. Use for UGC/testimonials where a robot voice would ruin authenticity.
@@ -112,20 +112,23 @@ brand_pass_video(input_path=src, output_path=dst,
 # music-only override: pass transcript="" to force-skip Whisper + TTS entirely
 ```
 
-## End-card detection — freeze-to-EOF (`--trim-endcard`)
+## End-card detection — reverse frame-matching v2 (`--trim-endcard`)
 
-Competitor sources often end on a static app/brand card (catalog screen, logo, CTA). The trimmer removes it so your own outro is the only end-card.
+Competitor sources often end on a brand card (catalog screen, logo, CTA — increasingly with a pulsing/animated button). The trimmer removes it so your own outro is the only end-card.
 
-**The load-bearing signal is a freeze segment that runs to EOF**, NOT a scene-change near the tail. A static card always freezes to the end; a scene-change alone fires on ordinary content cuts (e.g. a UGC testimonial cutting to its low-motion closing shot) and must NOT trigger a trim.
+**The card the video ENDS on is the ground truth** — so v2 compares the tail against it directly instead of looking for freezes or scene-changes:
 
-- `_scan_freeze` runs `ffmpeg freezedetect=n=0.003:d=0.4`, pairs freeze_start/end events, and keeps the freeze that reaches (within 0.6s of) EOF. Its start = the card start.
-- Guards: ignore the tail if it's shorter than `min_tail_s` (0.3s, no real card) or longer than `max_tail_pct` (0.55) of the video (a mostly-static source — trimming would gut content).
-- If nothing freezes to EOF → return None → **no trim** (the video ends on motion = real content).
-- Returns the freeze start directly. Do NOT back up to a nearby scene-change — that risks eating real content in the 1–1.5s before the card.
+1. Sample the tail window (`min(14s, 45% of duration)`) at 4 fps, downscaled grayscale 96×170.
+2. A frame belongs to the card when, vs the FINAL frame: mean abs diff ≤ 8 AND ≤15% of pixels moved >25. This tolerates animated CTAs (a pulsing button moves a few % of pixels) that defeat `freezedetect`, while a content cut changes most of the frame.
+3. Walk plateaus backwards; each plateau must be ≥0.7s AND **mostly perfectly-still** (≥45% of consecutive pairs with diff <1.0 — a real card holds still between pulses; real content moves EVERY frame, even slow pans). Multi-card outros ("TRY NOW" → "Download Now") are walked by re-anchoring the reference per plateau, up to 3 cards.
+4. Refine the content→card boundary at 12 fps, cut with 0.1s pre-roll (removes fade-in remnants).
+5. Refusals (→ no trim): tail isn't a held card; card fills the whole scan window (content boundary not visible — trimming would gut a mostly-static source); sub-1s tail across a gentle boundary (settling final shot, not a card).
 
-**Why freeze-detect over scene-detect (the old approach):** scene-detect missed soft fades INTO a static card (no hard cut to detect) → competitor outro left in (the original under-trim complaint). It also over-trimmed testimonials by mistaking the content cut into a low-motion closing shot for an outro. Freeze-detect fixes both: it catches the static card after a soft fade, and it leaves motion-ending testimonials alone.
+`_scan_freeze` (freezedetect n=0.003 d=0.4, trailing-freeze-to-EOF) remains ONLY as the fallback when v2 can't run (numpy missing / decode failure). v2's "no card" verdict is trusted — it does not fall through to freeze.
 
-Validated on the 57-video Chatify baby batch: 54 TRIM (median 1.3s, max 3.1s tail removed), 3 PASS — the 1 UGC testimonial that ends on its closing shot + 2 short gallery clips with no static tail.
+**Why v2 over freeze-detect (the previous approach):** freezedetect missed cards with ANY animation (cut thiếu — competitor outro shipped), and its noise threshold either misses subtle animation or false-fires on static real content (cut thừa). Matching against the actual final card + the stillness rule separates the two cleanly, and the 12 fps refine lands the cut at the card edge instead of a freeze-event timestamp.
+
+Validated: 10 synthetic cases (`tests/test_endcard_bgm.py` — static/multi/animated/no-card/window-filling) + 8 real Caller ID outputs: 7/8 detected the known ~3.1s appended outro within ±0.2s, 1 conservative refusal (static content right before the card → refused rather than over-trim).
 
 ## Side-blur stripping — two-stage detection
 
@@ -155,6 +158,8 @@ Source videos often use copyrighted music that Meta/TikTok fingerprint-flag. Use
 - Tracks shorter than video are auto-looped (`-stream_loop -1`).
 
 When `--bgm-pool` is set, brand-pass skips the BGM-side Demucs (saves ~10 s/video). The replacement is loudness-normalized: to −16 LUFS in music-only sources, or to 11–14 dB under the voice in voice sources (see "Voice Audibility QA" — royalty-free masters vary −8…−15 LUFS, a blind percentage would drown the narration).
+
+**BGM smart start (automatic):** royalty-free tracks routinely open with a near-silent build-up — starting the ad there kills the hook. Every replacement track is RMS-profiled (0.5 s windows) and the ad opens on the track's **best sustained section**: candidates are scored by mean level over the video's duration (cap 20 s), ONSETS preferred (window ≥3 dB above the previous one = a drop/chorus entry), and the final pick is seed-jittered among the top candidates for per-run fingerprint variety. The bed wraps seamlessly past the track end (`-stream_loop` + atrim). Demucs stems and source passthrough are NEVER offset — they must stay aligned with the picture. Log line per file: `BGMSTART <track> offset=…s section=…dB vs intro=…dB onset=…`. Measured on the real pool: every track gained **+4…+12 dB** of opening energy vs its intro.
 
 To generate `cluster_map.csv` for a new batch, run an audit (Demucs → Whisper-on-BGM → librosa tempo/energy/brightness → cluster). Pixabay is the recommended source for royalty-free tracks (free, no attribution, commercial use OK).
 
@@ -265,7 +270,7 @@ python trim_endcard.py --src "English/" --dst "English_trimmed/" --workers 4
 
 Use `trim-endcard` when you want to clean up a raw library *before* brand-passing, or to trim without the full branding overhead.
 
-> NOTE: the standalone `trim-endcard` skill still uses **scene-change** detection. The `--trim-endcard` flag inside `meta-ads-prepare` has moved to **freeze-to-EOF** detection (see "End-card detection" above), which is more accurate — it catches soft fades and won't over-trim motion-ending testimonials. If results differ, the in-pipeline freeze logic is the newer one.
+> NOTE: the standalone `trim-endcard` skill and the in-pipeline `--trim-endcard` both use **reverse frame-matching v2** now (same algorithm, kept in sync — `detect_endcard_v2` in the skill mirrors `_detect_endcard_start_v2` in `pipeline/brand_pass.py`). Scene-change remains only as the standalone skill's numpy-less fallback.
 
 ### `detect_voice` — voice/BGM classifier (in `split-campaigns`)
 Classify each source as VOICE vs BGM-only BEFORE brand-passing, so you can route deliberately (see "Voice/BGM routing").

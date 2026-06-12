@@ -39,6 +39,9 @@ names so `brandpass --bgm-pool <pool> --bgm-mode by-mood` routes each clip to it
   loudness-normalizes it 11–14 dB below the voice automatically (measured mix, see
   meta-ads-prepare → "Voice Audibility QA"), so master loudness doesn't matter when picking;
   but a busy vocal-sample track still fights the VO *spectrally*. No vocals, gentle movement.
+- **Quiet intros are FINE now** — brand-pass auto-starts every replacement track on its best
+  sustained section (RMS-profiled, onset-preferred, `BGMSTART` log). Don't reject an otherwise
+  perfect track because its first 10–30s are a sparse build-up; judge the track by its BODY.
 - **Music-only clips** (`BGM_UNIVERSAL`, no voice): pick the **catchiest / hookiest** track — here
   the music IS the hero that stops the scroll. Trendier, bigger drop, vocal chops OK.
 

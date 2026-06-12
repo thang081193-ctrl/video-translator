@@ -10,7 +10,11 @@ Applies V4c-equivalent transforms to any source video, producing a Reels-ready
 - Color LUT: saturation 1.12-1.18, contrast 1.07-1.13, gamma 0.93-0.97, hue 5-11°
 - Corner watermark in Reels safe zone: opacity 0.55-0.65, position jittered ±30/±15px
   (text OR PNG logo overlay)
-- Optional end-card auto-trim (cuts competitor app-card from source)
+- Optional end-card auto-trim v2 (reverse frame-matching vs the final frame:
+  catches animated competitor cards, multi-card outros, refines the cut at
+  12 fps; freezedetect only as fallback)
+- BGM smart start: replacement tracks open on their loudest sustained section
+  (quiet intros skipped, onset-preferred, seed-jittered among top candidates)
 - Outro card 1.3-1.7s at end (4 dark grey bg variants + brand text + optional logo)
 - Encoding: CRF 19-21, preset rotated, metadata stripped + fake creation_time
 
@@ -534,22 +538,153 @@ def _scan_freeze(video_path: str, src_dur: float, min_tail_s: float = 0.3,
         return None
 
 
+def _read_tail_frames(video_path: str, t0: float, dur: float,
+                      fps: float = 4.0, w: int = 96, h: int = 170):
+    """Decode a window of a video to small grayscale frames (numpy N×h×w int16).
+
+    Returns None when decode produced no frames. int16 so frame subtraction
+    can go negative without wrapping.
+    """
+    import numpy as np
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", f"{t0:.3f}", "-i", video_path,
+         "-t", f"{dur:.3f}", "-vf", f"fps={fps},scale={w}:{h}",
+         "-pix_fmt", "gray", "-f", "rawvideo", "-"],
+        capture_output=True, timeout=120,
+    )
+    n = len(r.stdout) // (w * h)
+    if n == 0:
+        return None
+    return (np.frombuffer(r.stdout[: n * w * h], dtype=np.uint8)
+            .reshape(n, h, w).astype(np.int16))
+
+
+def _detect_endcard_start_v2(video_path: str, src_dur: float, *,
+                             fps: float = 4.0, max_tail_s: float = 14.0,
+                             max_tail_pct: float = 0.45, min_card_s: float = 0.7,
+                             max_cards: int = 3) -> tuple[str, float | None]:
+    """Reverse frame-matching end-card detector.
+
+    The tail window is sampled at `fps` and each frame is compared to the
+    LAST frame (the card the video ends on): a frame belongs to the card when
+    its mean abs diff is small AND only a small fraction of pixels moved —
+    which tolerates animated CTAs (pulsing button, shimmer) that defeat
+    freezedetect, while a real content cut changes most of the frame. Earlier
+    cards of a multi-card outro ("TRY NOW" → "Download Now") are found by
+    re-anchoring the reference at each plateau boundary. The content/card
+    boundary is then refined at 12 fps so the cut lands at the card edge
+    (a 0.1 s pre-roll removes fade-in remnants).
+
+    Returns (status, cut):
+      ("ok", t)      — card detected, cut at t
+      ("none", None) — scanned fine, video does not end on a card
+      ("unavail", None) — numpy/decode unavailable, caller should fall back
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        return "unavail", None
+
+    def cardlike(frame, ref):
+        d = abs(frame - ref)
+        return d.mean() <= 8.0 and (d > 25).mean() <= 0.15
+
+    def still_frac(seg):
+        """Fraction of consecutive frame-pairs that are truly still.
+
+        A real card holds perfectly still most of the time (1.0; a pulsing CTA
+        ≈ 0.5 — still between pulses), while real content moves continuously
+        every frame (≈ 0.0, even slow pans/tickers). Empirical: lavfi testsrc
+        ≈ 2.5 mean consec diff with ZERO still pairs."""
+        if len(seg) < 2:
+            return 1.0
+        return float(np.mean([abs(seg[k + 1] - seg[k]).mean() < 1.0
+                              for k in range(len(seg) - 1)]))
+
+    window = min(max_tail_s, src_dur * max_tail_pct)
+    if window < min_card_s + 0.5:
+        return "none", None
+    t0 = max(0.0, src_dur - window)
+    frames = _read_tail_frames(video_path, t0, window + 0.5, fps=fps)
+    if frames is None or len(frames) < 3:
+        return "unavail", None
+
+    n = len(frames)
+    min_card_f = max(2, int(round(min_card_s * fps)))
+    earliest = n - 1
+    idx = n - 1
+    cards = 0
+    while cards < max_cards:
+        ref = frames[idx]
+        start = idx
+        j = idx - 1
+        while j >= 0 and cardlike(frames[j], ref):
+            start = j
+            j -= 1
+        plen = idx - start + 1
+        if plen < min_card_f or still_frac(frames[start: idx + 1]) < 0.45:
+            if cards == 0:
+                return "none", None     # tail isn't a held card at all
+            break                       # earlier plateau isn't a true card — stop
+        cards += 1
+        earliest = start
+        if j < 0:
+            break
+        # candidate previous card of a multi-card outro: validated by the same
+        # length + stillness rules on the next loop iteration
+        idx = j
+
+    if earliest <= 0:
+        # Card fills the whole scan window — content boundary not visible.
+        # Trimming here risks gutting a mostly-static source. Refuse.
+        return "none", None
+
+    cut_t = t0 + earliest / fps
+    tail_len = src_dur - cut_t
+    if tail_len < min_card_s:
+        return "none", None
+    # Short tails are accepted only across a HARD cut (a sub-second "card"
+    # matched across a gentle boundary is usually a settling final shot).
+    boundary_jump = abs(frames[earliest] - frames[earliest - 1]).mean()
+    if tail_len < 1.0 and boundary_jump < 20.0:
+        return "none", None
+
+    # Refine the content→card boundary at 12 fps.
+    f0 = max(0.0, cut_t - 1.0)
+    fine = _read_tail_frames(video_path, f0, (cut_t - f0) + 0.5, fps=12.0)
+    if fine is not None and len(fine) >= 4:
+        ref = fine[-1]                  # inside the first card (plateau ≥ min_card_s)
+        k = len(fine) - 1
+        j = k - 1
+        while j >= 0 and cardlike(fine[j], ref):
+            k = j
+            j -= 1
+        refined = f0 + k / 12.0
+        if 0 < refined <= cut_t + 0.4:
+            cut_t = refined
+    cut_t = max(0.5, cut_t - 0.10)      # pre-roll: chop fade-in remnants
+    return "ok", cut_t
+
+
 def _detect_endcard_start(video_path: str, src_dur: float,
                           min_tail_s: float = 0.3) -> float | None:
     """Detect outro/end-card start timestamp.
 
-    A real competitor outro is a near-static brand card that the video ENDS on.
-    The load-bearing signal is therefore a freeze segment that reaches EOF — NOT
-    a scene-change near the tail. A scene-change alone fires on ordinary content
-    cuts (e.g. a UGC testimonial cutting to its low-motion closing shot), which
-    must NOT be trimmed; a static card always registers a trailing freeze.
-
-    A static card always registers a freeze that runs to EOF; its start is the
-    cut/fade into the card. We return that freeze start directly — NOT a nearby
-    scene-change, which would risk backing up into real content before the card.
-
-    Returns the freeze start, or None if the video doesn't end on a static card.
+    Primary: reverse frame-matching (_detect_endcard_start_v2) — compares tail
+    frames to the final frame, so it catches animated cards freezedetect
+    misses AND refuses gentle boundaries freezedetect over-trims. Its verdict
+    is trusted both ways ("none" does NOT fall through). Freeze-detect runs
+    only when v2 is unavailable (no numpy / decode failure).
     """
+    try:
+        status, cut = _detect_endcard_start_v2(video_path, src_dur)
+    except Exception as e:
+        log.warning(f"endcard v2 failed ({e}); falling back to freeze-detect")
+        status, cut = "unavail", None
+    if status == "ok":
+        return cut
+    if status == "none":
+        return None
     return _scan_freeze(video_path, src_dur, min_tail_s)
 
 
@@ -672,6 +807,78 @@ def _transcribe_video(video_path: str, work_root: str | None = None) -> str:
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
+
+
+def _pick_bgm_start(bgm_path: str, needed_dur: float, rng=None) -> tuple[float, dict]:
+    """Best start offset (s) inside a BGM track — skip the quiet intro.
+
+    Royalty-free tracks routinely open with a sparse/near-silent build-up;
+    starting the ad there kills the hook. Decode to mono 8 kHz, take RMS dB
+    per 0.5 s window, score every candidate start by its mean level over the
+    next `needed_dur` (cap 20 s), then pick among the top candidates
+    (within 1.2 dB of best), preferring ONSETS (window ≥3 dB louder than the
+    previous one — a drop/chorus entry) and earlier positions; `rng` picks
+    inside that pool for per-run fingerprint variety.
+
+    Returns (offset_s, info). (0.0, {}) on any failure — caller keeps the
+    track's natural start.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        return 0.0, {}
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", bgm_path,
+             "-ac", "1", "-ar", "8000", "-f", "s16le", "-"],
+            capture_output=True, timeout=120,
+        )
+        a = np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32)
+        win = 4000                                    # 0.5 s @ 8 kHz
+        nwin = a.size // win
+        if nwin < 16:                                 # < 8 s of audio — keep natural start
+            return 0.0, {}
+        x = a[: nwin * win].reshape(nwin, win)
+        db = 20 * np.log10(np.sqrt((x ** 2).mean(axis=1)) / 32768.0 + 1e-6)
+        H = max(1, min(int(needed_dur / 0.5), 40))    # scoring horizon ≤ 20 s
+        if nwin <= H:
+            return 0.0, {}
+        score = np.convolve(db, np.ones(H) / H, mode="valid")
+        best = float(score.max())
+        cand = np.where(score >= best - 1.2)[0]
+        onsets = [int(c) for c in cand if c >= 1 and db[c] - db[c - 1] >= 3.0]
+        pool = sorted(onsets if onsets else [int(c) for c in cand])[:4]
+        pick = (rng or random).choice(pool)
+        offset = pick * 0.5
+        if offset < 1.0:
+            offset = 0.0                              # negligible gain — natural start
+        return float(offset), {
+            "score_db": round(float(score[pick]), 1),
+            "best_db": round(best, 1),
+            "intro_db": round(float(score[0]), 1),
+            "onset": pick in onsets,
+        }
+    except Exception as e:
+        log.warning(f"BGM start pick failed ({e}); using track start")
+        return 0.0, {}
+
+
+def _render_bgm_bed(bgm_path: str, offset: float, total_dur: float, out_wav: str) -> str:
+    """Render a finite BGM bed of exactly total_dur starting at `offset`.
+
+    `-stream_loop -1` + atrim wraps past the end of the track seamlessly, so
+    an offset near the tail still yields a full-length bed.
+    """
+    end = offset + total_dur + 0.25
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-stream_loop", "-1", "-i", bgm_path,
+         "-af", f"atrim=start={offset:.3f}:end={end:.3f},asetpts=PTS-STARTPTS",
+         "-c:a", "pcm_s16le", "-ar", "44100", "-ac", "2", out_wav],
+        capture_output=True, text=True, timeout=300,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"BGM bed render failed (exit {r.returncode}): {r.stderr[-400:]}")
+    return out_wav
 
 
 def _mix_voice_over_bgm(
@@ -927,8 +1134,26 @@ def brand_pass_video(
 
         # Pick BGM source: replacement track > Demucs-separated > raw source
         if bgm_replace_path:
-            bgm = bgm_replace_path
-            log.info(f"BGM: replacement={os.path.basename(bgm)} (skip Demucs)")
+            # Smart start: replacement tracks open on their best section, not
+            # the (often near-silent) intro. Demucs stems / source passthrough
+            # never get an offset — they must stay aligned with the video.
+            rng_bgm = random.Random(random_seed + 0xB60) if random_seed is not None else random.Random()
+            bgm_off, bgm_info = _pick_bgm_start(bgm_replace_path, total_dur, rng_bgm)
+            if bgm_off > 0.0:
+                try:
+                    bgm = _render_bgm_bed(bgm_replace_path, bgm_off, total_dur,
+                                          os.path.join(work, "bgm_bed.wav"))
+                except Exception as e:
+                    log.warning(f"BGM bed failed ({e}); using track from 0s")
+                    bgm = bgm_replace_path
+                    bgm_off = 0.0
+            else:
+                bgm = bgm_replace_path
+            log.info(
+                f"BGMSTART {os.path.basename(bgm_replace_path)} offset={bgm_off:.1f}s "
+                f"section={bgm_info.get('score_db')}dB vs intro={bgm_info.get('intro_db')}dB "
+                f"onset={bgm_info.get('onset')} (skip Demucs)"
+            )
         elif keep_voice:
             bgm = stems["no_vocals"]
         elif has_voice:

@@ -18,19 +18,27 @@ Standalone ffmpeg-based competitor end-card trimmer. Detects static/simple outro
 - You're running brand-pass — use `--trim-endcard` flag there instead (it's already integrated).
 - Videos have a wanted CTA card at the end that you want to keep.
 
-## Detection algorithm
+## Detection algorithm — reverse frame-matching v2
+
+The card the video ENDS on is the ground truth, so the detector compares the tail against the final frame directly (`detect_endcard_v2`, mirrors `pipeline/brand_pass.py::_detect_endcard_start_v2` — keep in sync):
 
 ```
-threshold = 0.08   (catches hard cuts AND soft fades, unlike 0.35 which misses fades)
-window    = last (1 - min_drop_pct) of video  [default: last 30%]
-cut point = min(valid scene changes in window) [first card, not last]
+window   = min(14s, 45% of duration), sampled at 4 fps, grayscale 96×170
+card     = frame vs FINAL frame: mean|diff| ≤ 8 AND ≤15% pixels moved >25
+           (tolerates pulsing/animated CTAs that freeze/scene detectors miss)
+plateau  = ≥0.7s AND ≥45% consecutive pairs perfectly still (diff <1.0)
+           (a card holds still between pulses; real content moves EVERY frame)
+multi-card = re-anchor reference per plateau, walk up to 3 cards back
+cut      = content→card boundary refined at 12 fps − 0.1s pre-roll (eats fade-in)
+refuse   = card fills the whole window (boundary not visible — don't gut a
+           static source), or sub-1s tail across a gentle boundary (settling shot)
 ```
 
-Why `min()` not `max()`:
-> A competitor outro often has **multiple cards** (e.g. "TRY NOW!" → "Download Now!!!"). `max()` would only cut the transition *between* cards, leaving the first card in. `min()` cuts from the very first outro card.
+Multi-card outros ("TRY NOW!" → "Download Now!!!") are cut from the FIRST card, same as before — but by plateau walking instead of `min(scene changes)`, so an ordinary content cut near the tail no longer fires.
 
-Why threshold 0.08 (not 0.35):
-> Competitor outros frequently fade in softly (no hard cut). 0.35 misses these. 0.08 catches fades while the `window` filter eliminates false positives from scene cuts early in the video.
+This replaces the old scene-change scan (threshold 0.08, earliest change in last 30%) which both **under-trimmed** (no event on soft fades into an already-similar card; nothing at all on animated cards) and **over-trimmed** (any ordinary content cut near the tail fired). The scene scan remains only as the numpy-less fallback inside `detect_endcard_start`.
+
+Validated: 10 synthetic cases (`tests/test_endcard_bgm.py` in the Video Translator repo) + 8 real brand-passed outputs — 7/8 found the known ~3.1s appended outro within ±0.2s, 1 conservative refusal.
 
 ## Usage
 
