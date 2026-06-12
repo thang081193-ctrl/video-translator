@@ -39,9 +39,9 @@ Caveat: the gate is conservative — a testimonial buried under loud BGM can be 
 
 1. **End-card auto-trim** (`--trim-endcard`) — **freeze-detect primary**, scene-detect fallback. Finds the static outro card the video ENDS on (robust to soft fades that scene-detect misses), with a transition guard so a held talking-head shot isn't mistaken for a card. See "End-card detection".
 2. **Speech detection** — Whisper-small on source audio, per-segment filter `text.strip() AND avg_logprob > -0.5`, total speech ≥ `max(1.5s, 5% of video)`. Decides voice path vs music-only path. See "Speech handling" for why this threshold.
-3. **Audio path A — TTS re-dub (default, voice present)**: Demucs htdemucs separates source BGM → Edge TTS reads transcript on top of BGM ducked at `bgm_vol` (0.65–0.80 jittered).
-   **Audio path A' — Keep original voice** (`keep_original_voice=True`): Demucs isolates the source *vocals* stem and mixes the original talking-head voice over new BGM (`--bgm-pool` track or the source's own no_vocals stem) — NO TTS. Use for UGC/testimonials where a robot voice would ruin authenticity.
-   **Audio path B — Music-only**: skip Demucs + TTS, passthrough source audio at 100% (or replace with `--bgm-pool` track).
+3. **Audio path A — TTS re-dub (default, voice present)**: Demucs htdemucs separates source BGM → Edge TTS reads transcript on top of BGM, **measured voice-first mix**: voice normalized to −16 LUFS, BGM placed 11–14 dB (jittered) BELOW the voice, post-mix LUFS QA gate. See "Voice Audibility QA".
+   **Audio path A' — Keep original voice** (`keep_original_voice=True`): Demucs isolates the source *vocals* stem and mixes the original talking-head voice over new BGM (`--bgm-pool` track or the source's own no_vocals stem) — NO TTS, same measured mix + gate. Use for UGC/testimonials where a robot voice would ruin authenticity.
+   **Audio path B — Music-only**: skip Demucs + TTS, passthrough source audio at 100% (a `--bgm-pool` replacement is loudness-normalized to −16 LUFS).
 4. **Side-blur detection** — cv2 Sobel per-column edge density finds the sharp content region inside any baked-in blur padding. Verified with Laplacian variance (sides must be ≤40% as sharp as center) to reject false positives on native low-detail content.
 5. **Effective-aspect branching** — compute aspect AFTER side-blur strip:
    - Within 5% of 9:16 (0.5625) → **Branch A**: pre-crop + zoom 1.03–1.06× + crop fill 1080×1920 (no bands).
@@ -154,9 +154,45 @@ Source videos often use copyrighted music that Meta/TikTok fingerprint-flag. Use
 - Multiple tracks per cluster subfolder → random pick adds per-video diversity.
 - Tracks shorter than video are auto-looped (`-stream_loop -1`).
 
-When `--bgm-pool` is set, brand-pass skips Demucs entirely (saves ~10 s/video). The replacement plays at 100% volume in music-only sources, or ducked at `bgm_vol` under new TTS in voice sources.
+When `--bgm-pool` is set, brand-pass skips the BGM-side Demucs (saves ~10 s/video). The replacement is loudness-normalized: to −16 LUFS in music-only sources, or to 11–14 dB under the voice in voice sources (see "Voice Audibility QA" — royalty-free masters vary −8…−15 LUFS, a blind percentage would drown the narration).
 
 To generate `cluster_map.csv` for a new batch, run an audit (Demucs → Whisper-on-BGM → librosa tempo/energy/brightness → cluster). Pixabay is the recommended source for royalty-free tracks (free, no attribution, commercial use OK).
+
+## Voice Audibility QA — BẮT BUỘC cho mọi video có giọng đọc
+
+**The failure this kills:** royalty-free BGM masters are HOT (measured Pixabay pool: −8.2…−15.3 LUFS, several clip past 0 dBTP) while Demucs vocal stems / Edge-TTS land around −20…−31 LUFS. Any blind gain multiplier (`bgm_vol 0.65–0.80`, even 0.35–0.45) can put the BGM ABOVE the voice → narration drowned. Never mix by percentage; mix by MEASURED loudness.
+
+### The standard (enforced in `pipeline/brand_pass.py` — automatic)
+
+| Metric | Target | Mechanism |
+|---|---|---|
+| Voice level | **−16 LUFS** integrated | stem measured (ffmpeg loudnorm), linear gain (clamp −12…+20 dB) |
+| BGM under voice | **11–14 dB below** voice (jittered per-run for Andromeda variance) | BGM measured, gain = (−16 − margin) − bgm_LUFS |
+| Final mix | −16 ±3 LUFS, gate range **[−19, −12]** | post-mix re-measure; 1 corrective re-mix, then `DegradedError` (file will NOT ship broken) |
+| True peak | ≤ −1 dBFS | `amix normalize=0` + `alimiter=limit=0.891` |
+| Voiceless stem (forced-voice on music-only source) | NOT boosted | stem < −45 LUFS → `NOVOICE_FALLBACK`, music-led mix at −16 LUFS (no hiss amplification) |
+
+Every voiced render logs one line: `VOICEMIX voice_in=… bgm_in=… gain_v=… gain_b=… margin=… final=…LUFS tp=… MEASURED` — grep the run log for `VOICEMIX` to audit a batch without re-listening.
+
+**Rules:**
+- NEVER pass `bgm_volume=` in new runs — that opts into the legacy blind-ratio mix (ungated, logs `LEGACY_UNGATED`). It exists only to reproduce old outputs.
+- Dub/localize path (`pipeline/dub/mixer.py`) has its own guard: projected voice margin < 8 dB → BGM auto-cut (`cfg.dub.min_voice_margin_db`), logs `VOICEMIX guard`.
+- A `DegradedError: voice-mix QA gate failed` means the mix landed outside range twice — inspect the source/stem instead of overriding the gate.
+
+### Post-hoc audit (delivered packs / any folder)
+
+```bash
+python "<skills-dir>/meta-ads-prepare/qa_voice_mix.py" "<pack folder>" \
+  --sample 10 --whisper --expect-voice --csv qa_report.csv
+```
+
+Per file: integrated LUFS (PASS −20…−11), true peak (WARN > −0.3), and with `--whisper` a faster-whisper-tiny speech check — **0 recovered words on a voiced creative = the voice is drowned or missing → FAIL, exit 1**. Run this on every pack BEFORE upload; spot-listen anything flagged.
+
+### Proof (2026-06-12)
+
+- **Synthetic worst case** (`tests/test_voice_mix.py`, 11 tests): BGM 19 dB hotter than the voice stem → measured mix outputs voice ≥ 8 dB ABOVE the BGM band, final in range. Voiceless-stem fallback, gate hard-fail, legacy mode, and the dub-mixer guard are each pinned by a test.
+- **Real clip A/B** (30 s Caller ID creative + hottest pool track −8.2 LUFS, whisper-tiny word recovery vs the spoken script): legacy `bgm_volume=0.7` → **79%**, hook garbled ("Tired of *Spain Faux*", "*All our ID*"); measured mix → **89%**; keep-original-voice (Demucs stem) + measured → **93%**. Same seed, same BGM — only the mix law changed.
+- Legacy A still showed −19 LUFS overall — "LUFS looks fine" does NOT mean the voice is audible. Margin + speech check is the real gate.
 
 ## Brand-bg PNG (legacy `--brand-bg`)
 

@@ -38,3 +38,4 @@ htmlcov/
 
 # Claude Code user-local settings
 .claude/settings.local.json
+_temp_qa/

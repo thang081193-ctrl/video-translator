@@ -30,7 +30,14 @@ from pipeline.errors import FatalError
 
 
 def _capture_mix_cmd(loop_bgm: bool, audio_mode: str) -> list[str]:
-    """Run _mix_voice_and_bgm with ffmpeg mocked; return the ffmpeg argv."""
+    """Run _mix_voice_and_bgm with ffmpeg mocked; return the MIX ffmpeg argv.
+
+    Patching subprocess.run on the mixer module patches the shared subprocess
+    module, so the voice-audibility guard's loudness probes (measure_loudness
+    in pipeline.audio) hit the same mock — their empty-stderr result makes
+    them return None and the guard becomes a no-op. Filter to the one command
+    that actually mixes (`-filter_complex` with amix).
+    """
     with patch("pipeline.dub.mixer.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         _mix_voice_and_bgm(
@@ -41,8 +48,13 @@ def _capture_mix_cmd(loop_bgm: bool, audio_mode: str) -> list[str]:
             bgm_volume=0.25,
             output_path="out.m4a",
         )
-        assert mock_run.call_count == 1
-        return list(mock_run.call_args[0][0])
+        mix_calls = [
+            c for c in mock_run.call_args_list
+            if "-filter_complex" in c[0][0]
+            and "amix" in c[0][0][c[0][0].index("-filter_complex") + 1]
+        ]
+        assert len(mix_calls) == 1
+        return list(mix_calls[0][0][0])
 
 
 def _filter_complex(cmd: list[str]) -> str:

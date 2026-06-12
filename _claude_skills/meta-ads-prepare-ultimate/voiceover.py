@@ -56,17 +56,46 @@ async def _tts_robust(text: str, voices: list, vidx: int, rate: str, out: str, a
 # CPU from whatever the user has in the foreground.
 _LOWPRI = subprocess.BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" else 0
 
+def _lufs(path: str) -> float | None:
+    """Integrated LUFS of a file's audio (ffmpeg loudnorm analysis pass)."""
+    try:
+        r = subprocess.run(["ffmpeg","-hide_banner","-nostats","-i",path,"-map","0:a:0",
+            "-af","loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json","-f","null","-"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=300, creationflags=_LOWPRI)
+        if r.returncode != 0:
+            return None
+        m = None
+        for m in re.finditer(r"\{[^{}]*\"input_i\"[^{}]*\}", r.stderr, re.S):
+            pass
+        if m is None:
+            return None
+        return max(float(json.loads(m.group(0))["input_i"]), -99.0)
+    except Exception:
+        return None
+
 def _mix(clip: str, vo: str, out: str, clip_dur: float, vo_dur: float):
     target = clip_dur - 0.3
     atempo = min(1.18, vo_dur / target) if vo_dur > target else 1.0
-    vof = "adelay=300|300,volume=1.7"
+    # Measured voice-first mix: VO normalized to -16 LUFS, BGM 12 dB under the
+    # VO. Blind ratios (BGM 0.30 / VO 1.7) drown the pitch whenever the BGM
+    # master is hot and the TTS lands quiet — measure instead; the old ratios
+    # remain only as the fallback when measurement fails.
+    vi, bi = _lufs(vo), _lufs(clip)
+    if vi is not None and bi is not None and vi > -45.0:
+        vgain = max(-12.0, min(20.0, -16.0 - vi))
+        bgain = max(-40.0, min(20.0, -28.0 - bi))   # -16 target − 12 dB margin
+        vo_vol, bg_vol = f"volume={vgain:+.2f}dB", f"volume={bgain:+.2f}dB"
+    else:
+        vo_vol, bg_vol = "volume=1.7", "volume=0.30"
+    vof = f"adelay=300|300,{vo_vol}"
     if atempo > 1.001:
         vof = f"atempo={atempo:.3f}," + vof
     # -c:v copy => video is NOT re-encoded (only AAC audio), so each job is light;
     # -threads 1 keeps a single ffmpeg from grabbing every core.
     subprocess.run(["ffmpeg","-v","error","-threads","1","-i",clip,"-i",vo,"-filter_complex",
-        f"[0:a]volume=0.30[bg];[1:a]{vof}[v];[bg][v]amix=inputs=2:duration=first:"
-        f"dropout_transition=2:normalize=0[a]",
+        f"[0:a]{bg_vol}[bg];[1:a]{vof}[v];[bg][v]amix=inputs=2:duration=first:"
+        f"dropout_transition=2:normalize=0,alimiter=limit=0.891:level=false[a]",
         "-map","0:v","-map","[a]","-c:v","copy","-c:a","aac","-b:a","160k","-y",out],
         capture_output=True, creationflags=_LOWPRI)
 

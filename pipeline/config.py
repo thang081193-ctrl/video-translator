@@ -124,6 +124,9 @@ class DubConfig:
     # Volume scaling for custom_bgm mode
     custom_bgm_multiplier: float = 2.0
     custom_voice_vol: float = 1.8
+    # Voice-audibility guard: minimum measured voice-over-BGM margin in dB;
+    # the BGM gain is cut when the projected margin falls below this (mixer).
+    min_voice_margin_db: float = 8.0
     # Demucs
     demucs_model: str = "htdemucs"
 

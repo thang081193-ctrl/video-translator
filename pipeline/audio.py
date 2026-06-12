@@ -2,6 +2,7 @@ import subprocess
 import shutil
 import os
 import json
+import re
 
 from pipeline.config import cfg
 from pipeline.errors import FatalError
@@ -122,6 +123,45 @@ def extract_audio_hq(video_path: str, output_dir: str | None = None) -> str:
     )
 
     return wav_path
+
+
+def measure_loudness(media_path: str, timeout: int | None = None) -> dict | None:
+    """Measure a file's audio loudness with ffmpeg loudnorm (analysis pass).
+
+    Returns {"input_i", "input_tp", "input_lra", "input_thresh"} — integrated
+    LUFS, true peak dBTP, loudness range LU, gating threshold LUFS — or None
+    when the file has no measurable audio (missing file, no audio stream,
+    ffmpeg/parse failure). Infinite values (digital silence) map to -99.0 so
+    callers can compare numerically. Callers MUST handle None: this helper is
+    deliberately non-raising so mix paths can fall back instead of dying.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-nostats",
+                "-i", media_path,
+                "-map", "0:a:0",
+                "-af", "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json",
+                "-f", "null", "-",
+            ],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout or cfg.ffmpeg.timeout_default,
+        )
+        if result.returncode != 0:
+            return None
+        m = None
+        for m in re.finditer(r"\{[^{}]*\"input_i\"[^{}]*\}", result.stderr, re.S):
+            pass  # keep the LAST json block (loudnorm prints it at stream end)
+        if m is None:
+            return None
+        data = json.loads(m.group(0))
+        out = {}
+        for key in ("input_i", "input_tp", "input_lra", "input_thresh"):
+            v = float(data[key])
+            out[key] = v if v > -99.0 and v < 99.0 else -99.0
+        return out
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError):
+        return None
 
 
 def get_video_info(video_path: str) -> dict:

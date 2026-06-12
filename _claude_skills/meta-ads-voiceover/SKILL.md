@@ -95,8 +95,10 @@ PYTHONIOENCODING=utf-8 "<PY>" "<ULT>/run.py" voiceover \
   priority** + `-c:v copy` (video not re-encoded) → a 1500+ clip run finishes in ~15 min and the
   machine stays usable. Raise only if the machine is idle.
 - Each TTS call **retries + rotates voice** on a transient Edge "no audio" blip → no gaps at scale.
-- Per clip × lang: picks `short`/`long` by duration, fills `{app}`, ducks BGM to 0.30, overlays VO
-  at 1.7 (`amix normalize=0`), atempo≤1.18× to fit. Output:
+- Per clip × lang: picks `short`/`long` by duration, fills `{app}`, then the **measured voice-first
+  mix** — VO loudness-normalized to −16 LUFS, clip BGM placed 12 dB UNDER the VO (both measured via
+  ffmpeg loudnorm; blind 0.30/1.7 ratios only as fallback), `amix normalize=0` + limiter,
+  atempo≤1.18× to fit. The VO can never be drowned by a hot BGM master. Output:
   `<dst>/VOICED_<Language>/<angle>/<CODE>-VO_DDMMNN.mp4`. Records `vo_outputs{lang:path}` in manifest.
 - **Branded outro is inherited** from the master (`-c:v copy`) — no extra outro step needed.
 
@@ -112,6 +114,11 @@ which are hard to read for Meta upload. (The `--src` source working tree keeps a
 # spot-check a non-Latin language has a real audio stream:
 ffprobe -v error -show_entries stream=codec_type:format=duration -of default=noprint_wrappers=1 "<one VO mp4>"
 # verify the last frame is the branded outro (grab frame at duration-1s, view it)
+
+# VOICE AUDIBILITY (bắt buộc): LUFS −20…−11, whisper-tiny must recover words on every VO file
+python "<skills-dir>/meta-ads-prepare/qa_voice_mix.py" "<dst>" --sample 10 --whisper --expect-voice
+# 0 recovered words on a VO clip = voice drowned/missing → FAIL (exit 1). Spec & thresholds:
+# meta-ads-prepare SKILL.md → "Voice Audibility QA".
 ```
 Confirm: per-lang count correct, `codec_type=audio` present, duration sane, outro shows.
 

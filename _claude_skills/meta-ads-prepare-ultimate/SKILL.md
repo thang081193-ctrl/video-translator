@@ -201,7 +201,9 @@ Per BGM-only clip × target language:
    transient Edge "no audio" blip so a flaky call never leaves a gap. Rate from `vo.rate` (default +6%).
 3. **Fit**: if the TTS is longer than the clip, `atempo` up to 1.18×; the `vo_bank` short/long tiers
    keep this minimal.
-4. **Mix**: duck the clip's BGM to 0.30, overlay the VO at 1.7 (`amix normalize=0`), VO delayed 0.3s.
+4. **Mix — measured voice-first**: VO normalized to −16 LUFS, clip BGM placed 12 dB under the VO
+   (both loudness-measured via ffmpeg loudnorm; the old 0.30/1.7 blind ratios remain only as the
+   fallback when measurement fails), `amix normalize=0` + limiter, VO delayed 0.3s.
    No Demucs (the clip has no existing voice). Video is stream-copied (fast).
    **Parallel + polite:** jobs run at bounded concurrency (`--concurrency`, default ≈ half the CPU
    cores) with each ffmpeg at `-threads 1` and **below-normal priority**, so a full render (1500+
@@ -248,6 +250,8 @@ Audio routing is driven by the manifest, NOT re-detected:
 
 **Critical efficiency:** the manifest `transcript` is passed into `brand_pass_video(transcript=...)`, so **brand-pass does NOT run Whisper again** (brand_pass.py skips its internal transcription when `transcript` is provided).
 
+**Voice Audibility QA (automatic):** every voiced render uses the measured voice-first mix — voice normalized to −16 LUFS, BGM 11–14 dB below the voice, post-mix LUFS gate (`DegradedError` instead of shipping a drowned mix). Each file logs one `VOICEMIX … MEASURED` line — grep the run log to audit a batch. NEVER pass `bgm_volume=` (legacy blind mix, ungated). After rendering, audit the deliverables: `python "<skills-dir>/meta-ads-prepare/qa_voice_mix.py" "<dst>" --sample 10 --whisper --expect-voice` on the `VOICED_*` folders. Full spec: meta-ads-prepare SKILL.md → "Voice Audibility QA".
+
 ### Step 6 — `package` (per-vertical creative assets + countries + QA gate + license check)
 Run **once per vertical**, matching the brandpass `--dst`:
 ```bash
@@ -259,7 +263,7 @@ Writes into `<dst>`:
 - `creative_assets.csv` — **VOICED videos only**, one row per (video, spoken language): file × language × vertical × angle × hook × localized headlines × localized primary_texts × bgm_cluster. These are language-specific. Group into ad sets by angle.
 - `bgm_only_assets.csv` — **BGM-only videos** (the `_music/` group), one row each: file × angle × hook × bgm_cluster × `market_hint` × reuse-note. Language-AGNOSTIC — the same clip ships to every country; copy is written per market at campaign time.
 - `countries.txt` — T1+T2 targeting list (add `--east-eu` / `--extra-countries`).
-- `qa_report.csv` — per output (voiced + BGM-only): dimensions==1080×1920, has-audio, duration>1 → PASS/FAIL. Exits non-zero if any FAIL.
+- `qa_report.csv` — per output (voiced + BGM-only): dimensions==1080×1920, has-audio, duration>1 → PASS/FAIL. Exits non-zero if any FAIL. For voice audibility (LUFS + whisper speech check) additionally run `qa_voice_mix.py --whisper --expect-voice` from the meta-ads-prepare skill on the `VOICED_*` folders.
 - `00_CAMPAIGNS_README.txt` — **visual map of the campaign tree** (each campaign + its angle ad-sets + ad counts + which countries to target + Meta setup + the BGM-swap scaling note). This is the human-readable index — open it instead of squinting at CSVs.
 - **BGM license check** — warns if any BGM-only video kept SOURCE BGM (Meta copyright-flag risk; swap to a royalty-free Pixabay pool).
 

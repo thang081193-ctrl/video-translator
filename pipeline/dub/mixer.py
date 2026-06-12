@@ -149,6 +149,12 @@ def _mix_voice_and_bgm(
     want BGM close to its original loudness, so we scale it higher (the
     slider acts as a relative mix ratio). Voice is kept at a comfortable
     boost above BGM.
+
+    Voice-audibility guard: the slider gains are RELATIVE, so a hot BGM master
+    over a quiet TTS track can still drown the narration. Both inputs are
+    loudness-measured (best effort — measurement failure changes nothing) and
+    the BGM gain is reduced whenever the projected voice-over-BGM margin falls
+    under `min_voice_margin_db`.
     """
     log.info(f"Mixing with background music (volume={bgm_volume:.0%})...")
     bgm_input_args = ["-stream_loop", "-1", "-i", bgm_source] if loop_bgm else ["-i", bgm_source]
@@ -159,6 +165,26 @@ def _mix_voice_and_bgm(
     else:
         bgm_vol = bgm_volume * cfg.dub.custom_bgm_multiplier
         voice_vol = cfg.dub.custom_voice_vol
+
+    from math import log10
+
+    from pipeline.audio import measure_loudness
+    vmeas = measure_loudness(dubbed_raw)
+    bmeas = measure_loudness(bgm_source)
+    if (vmeas is not None and bmeas is not None
+            and vmeas["input_i"] > -50.0 and bmeas["input_i"] > -60.0):
+        projected = ((vmeas["input_i"] + 20 * log10(voice_vol))
+                     - (bmeas["input_i"] + 20 * log10(bgm_vol)))
+        if projected < cfg.dub.min_voice_margin_db:
+            cut_db = cfg.dub.min_voice_margin_db - projected
+            bgm_vol = bgm_vol / (10 ** (cut_db / 20))
+            log.warning(
+                f"VOICEMIX guard: projected voice margin {projected:.1f} dB < "
+                f"{cfg.dub.min_voice_margin_db} dB (voice={vmeas['input_i']:.1f}, "
+                f"bgm={bmeas['input_i']:.1f} LUFS) — cutting BGM {cut_db:.1f} dB"
+            )
+        else:
+            log.info(f"VOICEMIX margin ok: {projected:.1f} dB")
 
     # When the BGM is looped (`-stream_loop -1`) it is an INFINITE input, so
     # amix=duration=longest would never reach EOF — ffmpeg would run until the

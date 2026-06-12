@@ -3,7 +3,9 @@
 Applies V4c-equivalent transforms to any source video, producing a Reels-ready
 1080x1920 mp4 with PER-RUN JITTERED params (different fingerprint each call):
 - TTS re-dub via Edge TTS: voice rotated from 7-male-English pool, rate ±3%
-- Demucs htdemucs BGM separation, mixed under TTS (gain 0.35-0.45)
+- Demucs htdemucs BGM separation, mixed under the voice with MEASURED loudness:
+  voice normalized to -16 LUFS, BGM placed 11-14 dB (jittered) below the voice,
+  post-mix LUFS QA gate — narration can never be drowned by a hot BGM master
 - Zoom 1.03-1.06x + crop with ±15px offset (alters spatial fingerprint)
 - Color LUT: saturation 1.12-1.18, contrast 1.07-1.13, gamma 0.93-0.97, hue 5-11°
 - Corner watermark in Reels safe zone: opacity 0.55-0.65, position jittered ±30/±15px
@@ -44,8 +46,9 @@ import subprocess
 import sys
 import tempfile
 
-from pipeline.audio import extract_audio
+from pipeline.audio import extract_audio, measure_loudness
 from pipeline.dub.separator import separate_audio
+from pipeline.errors import DegradedError
 from pipeline.logger import get_logger
 from pipeline.transcribe import transcribe
 
@@ -73,7 +76,7 @@ SAFE_JITTER = {
     "wm_opacity":   (0.55, 0.65),
     "wm_dx":        (-30, 30),
     "wm_dy":        (-15, 15),
-    "bgm_vol":      (0.65, 0.80),
+    "bgm_margin_db": (11.0, 14.0),
     "tts_rate_pct": (-3, 3),
     "outro_dur":    (2.0, 2.5),
     "outro_bg":     ["0x7B2FBE", "0x6020A8", "0x8B40CF", "0x4A90D9", "0x3070C0", "0x5518A0"],
@@ -95,6 +98,19 @@ TTS_VOICE_POOL_MALE = [
 DEFAULT_VOICE = TTS_VOICE_POOL_MALE[0]
 DEFAULT_OUTRO_DUR = 1.5
 DEFAULT_BGM_VOL = 0.4
+
+# Measured voice-first mix (voice path). Blind gain multipliers drown the
+# narration whenever the BGM master is hotter than the voice stem (Pixabay
+# tracks ≈ -9 LUFS vs Demucs/TTS stems ≈ -20..-30 LUFS), so both stems are
+# loudness-measured and normalized instead: voice → VOICE_TARGET_LUFS, BGM →
+# bgm_margin_db BELOW the voice. The margin is jittered for fingerprint
+# variance; audibility holds across the whole range.
+VOICE_TARGET_LUFS = -16.0
+VOICE_GAIN_LIMITS = (-12.0, 20.0)   # never boost a stem more than +20 dB
+BGM_GAIN_LIMITS = (-40.0, 20.0)
+VOICE_SILENT_LUFS = -45.0           # stem below this = no real voice in source
+MIX_FINAL_RANGE = (-19.0, -12.0)    # post-mix integrated-LUFS QA gate
+MUSIC_TARGET_LUFS = -16.0           # music-only replacement-BGM target
 
 # Find system font
 _FONT = None
@@ -578,7 +594,7 @@ def _build_jittered_params(seed: int | None) -> dict:
         "wm_opacity":    round(U("wm_opacity"), 2),
         "wm_dx":         I("wm_dx"),
         "wm_dy":         I("wm_dy"),
-        "bgm_vol":       round(U("bgm_vol"), 2),
+        "bgm_margin_db": round(U("bgm_margin_db"), 1),
         "tts_rate_pct":  I("tts_rate_pct"),
         "outro_dur":     round(U("outro_dur"), 2),
         "outro_bg":      C("outro_bg"),
@@ -654,6 +670,120 @@ def _transcribe_video(video_path: str, work_root: str | None = None) -> str:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+def _mix_voice_over_bgm(
+    bgm: str,
+    voice_track: str,
+    total_dur: float,
+    margin_db: float,
+    mixed_audio: str,
+    legacy_bgm_vol: float | None = None,
+) -> dict:
+    """Mix the voice track over looped BGM into `mixed_audio` (AAC 192k).
+
+    Default (measured) mode: both stems are loudness-measured; voice gets a
+    linear gain to VOICE_TARGET_LUFS, BGM lands `margin_db` below the voice,
+    amix normalize=0 keeps absolute levels, alimiter caps peaks. The mixed
+    file is re-measured as a QA gate — one corrective re-mix is attempted,
+    then DegradedError. A near-silent voice stem (forced-voice run on a
+    music-only source) is NOT boosted: the mix falls back to music-led levels.
+
+    `legacy_bgm_vol` reproduces the pre-v2 blind-ratio mix exactly (callers
+    passing an explicit bgm_volume) — measured QA numbers are logged only.
+
+    Returns the QA dict: mode, voice_in, bgm_in, voice_gain, bgm_gain,
+    margin_db, final_i, final_tp, verdict.
+    """
+    qa: dict = {"margin_db": round(margin_db, 1)}
+
+    if legacy_bgm_vol is not None:
+        qa["mode"] = "legacy_ratio"
+        r = subprocess.run(
+            ["ffmpeg", "-y",
+             "-stream_loop", "-1", "-i", bgm,
+             "-i", voice_track,
+             "-filter_complex",
+             f"[1:a]volume=1.0,apad[v0];"
+             f"[0:a]volume={legacy_bgm_vol},apad[v1];"
+             f"[v0][v1]amix=inputs=2:duration=first:dropout_transition=0,atrim=duration={total_dur}[aout]",
+             "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", mixed_audio],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"ffmpeg mix failed (exit {r.returncode}): {r.stderr[-800:]}")
+        fm = measure_loudness(mixed_audio)
+        qa.update({"final_i": fm["input_i"] if fm else None,
+                   "final_tp": fm["input_tp"] if fm else None,
+                   "verdict": "LEGACY_UNGATED"})
+        return qa
+
+    vm = measure_loudness(voice_track)
+    bm = measure_loudness(bgm)
+    if vm is None or bm is None:
+        raise DegradedError(
+            f"voice-mix: loudness measurement failed "
+            f"(voice={'ok' if vm else 'FAIL'}, bgm={'ok' if bm else 'FAIL'}) — "
+            f"cannot guarantee voice audibility"
+        )
+    v_i, b_i = vm["input_i"], bm["input_i"]
+    qa.update({"mode": "measured", "voice_in": v_i, "bgm_in": b_i})
+
+    if v_i <= VOICE_SILENT_LUFS:
+        # No real voice in the stem — boosting it +20 dB would only raise the
+        # Demucs noise floor into audible hiss. Mix music-led instead.
+        voice_gain = 0.0
+        bgm_gain = _clamp(MUSIC_TARGET_LUFS - b_i, *BGM_GAIN_LIMITS)
+        qa["verdict"] = "NOVOICE_FALLBACK"
+    else:
+        voice_gain = _clamp(VOICE_TARGET_LUFS - v_i, *VOICE_GAIN_LIMITS)
+        bgm_gain = _clamp((VOICE_TARGET_LUFS - margin_db) - b_i, *BGM_GAIN_LIMITS)
+        qa["verdict"] = "MEASURED"
+
+    for attempt in (1, 2):
+        r = subprocess.run(
+            ["ffmpeg", "-y",
+             "-stream_loop", "-1", "-i", bgm,
+             "-i", voice_track,
+             "-filter_complex",
+             f"[1:a]volume={voice_gain:+.2f}dB,apad[v0];"
+             f"[0:a]volume={bgm_gain:+.2f}dB,apad[v1];"
+             f"[v0][v1]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
+             f"atrim=duration={total_dur},alimiter=limit=0.891:level=false[aout]",
+             "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", mixed_audio],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"ffmpeg mix failed (exit {r.returncode}): {r.stderr[-800:]}")
+
+        fm = measure_loudness(mixed_audio)
+        final_i = fm["input_i"] if fm else None
+        qa.update({"voice_gain": round(voice_gain, 2), "bgm_gain": round(bgm_gain, 2),
+                   "final_i": final_i, "final_tp": fm["input_tp"] if fm else None})
+
+        if qa["verdict"] == "NOVOICE_FALLBACK":
+            break  # music-led mix: nothing voice-related to gate
+        if final_i is not None and MIX_FINAL_RANGE[0] <= final_i <= MIX_FINAL_RANGE[1]:
+            break
+        if attempt == 1 and final_i is not None:
+            # One linear correction toward target (sparse narration can land the
+            # integrated level under range; both gains move together so the
+            # voice/BGM margin is preserved).
+            corr = _clamp(VOICE_TARGET_LUFS - final_i, -6.0, 6.0)
+            voice_gain = _clamp(voice_gain + corr, *VOICE_GAIN_LIMITS)
+            bgm_gain = _clamp(bgm_gain + corr, *BGM_GAIN_LIMITS)
+            log.warning(f"voice-mix QA: final={final_i} LUFS out of range "
+                        f"{MIX_FINAL_RANGE}, re-mixing with {corr:+.1f} dB correction")
+        else:
+            raise DegradedError(
+                f"voice-mix QA gate failed after re-mix: final={final_i} LUFS "
+                f"not in {MIX_FINAL_RANGE} (voice_in={v_i}, bgm_in={b_i})"
+            )
+    return qa
+
+
 def brand_pass_video(
     input_path: str,
     output_path: str,
@@ -691,7 +821,13 @@ def brand_pass_video(
     EOF; videos ending on motion (e.g. a UGC testimonial) are left intact.
 
     `random_seed=None` → fresh random each call. `random_seed=<int>` → deterministic.
-    Explicit `voice` / `outro_duration` / `bgm_volume` override the jittered pick.
+    Explicit `voice` / `outro_duration` override the jittered pick.
+
+    Audio mix: by default the voice path uses the MEASURED voice-first mix —
+    voice normalized to VOICE_TARGET_LUFS, BGM a jittered margin below it,
+    post-mix LUFS QA gate (DegradedError on failure). Passing an explicit
+    `bgm_volume` opts back into the legacy blind-ratio mix (no gate) — only
+    for reproducing old outputs; new runs should leave it None.
 
     Returns output_path on success.
     """
@@ -711,7 +847,8 @@ def brand_pass_video(
     rng = random.Random(random_seed)   # second rng for outro frame jitter
     if voice is not None: p["voice"] = voice
     if outro_duration is not None: p["outro_dur"] = outro_duration
-    if bgm_volume is not None: p["bgm_vol"] = bgm_volume
+    # Explicit bgm_volume → legacy blind-ratio mix; default → measured mix v2.
+    p["bgm_vol"] = bgm_volume
 
     if outro_video:
         try:
@@ -730,12 +867,14 @@ def brand_pass_video(
     else:
         work = tempfile.mkdtemp(prefix="brandpass_")
     log.info(f"Brand-pass: {os.path.basename(input_path)} → {os.path.basename(output_path)}")
+    _bgm_desc = (f"LEGACY vol={p['bgm_vol']}" if p["bgm_vol"] is not None
+                 else f"margin={p['bgm_margin_db']}dB")
     log.info(
         f"Seed={p['seed']}  voice={p['voice']}  rate={p['tts_rate_pct']:+d}%  "
         f"zoom={p['zoom']}  crop_off=({p['crop_dx']},{p['crop_dy']})  "
         f"color=(sat={p['saturation']},con={p['contrast']},gam={p['gamma']},hue={p['hue']}°)  "
         f"wm=(op={p['wm_opacity']},dx={p['wm_dx']},dy={p['wm_dy']})  "
-        f"bgm={p['bgm_vol']}  outro=({p['outro_dur']}s, bg={p['outro_bg']})  "
+        f"bgm={_bgm_desc}  outro=({p['outro_dur']}s, bg={p['outro_bg']})  "
         f"enc=(crf={p['crf']}, preset={p['preset']})"
     )
     try:
@@ -802,46 +941,56 @@ def brand_pass_video(
             bgm = src_audio  # passthrough — no separation needed
 
         if has_voice:
-            # VOICE PATH: voice over BGM (ducked), bgm loops to cover full duration.
-            # voice source = original isolated vocals (keep_voice) or fresh TTS.
+            # VOICE PATH: voice over BGM, measured voice-first mix (see
+            # _mix_voice_over_bgm). voice source = original isolated vocals
+            # (keep_voice) or fresh TTS.
             if keep_voice:
                 voice_track = orig_vocals
-                log.info(f"Mixing ORIGINAL voice over BGM (BGM vol={p['bgm_vol']}) → {total_dur:.2f}s ...")
+                log.info(f"Mixing ORIGINAL voice over BGM → {total_dur:.2f}s ...")
             else:
                 rate_str = f"{p['tts_rate_pct']:+d}%"
                 voice_track = os.path.join(work, "tts.mp3")
                 log.info(f"TTS Edge ({p['voice']}, rate={rate_str}) ...")
                 asyncio.run(_generate_tts(transcript, p["voice"], voice_track, rate=rate_str))
-                log.info(f"Mixing TTS over BGM (BGM vol={p['bgm_vol']}) → {total_dur:.2f}s ...")
+                log.info(f"Mixing TTS over BGM → {total_dur:.2f}s ...")
 
-            r = subprocess.run(
-                ["ffmpeg", "-y",
-                 "-stream_loop", "-1", "-i", bgm,
-                 "-i", voice_track,
-                 "-filter_complex",
-                 f"[1:a]volume=1.0,apad[v0];"
-                 f"[0:a]volume={p['bgm_vol']},apad[v1];"
-                 f"[v0][v1]amix=inputs=2:duration=first:dropout_transition=0,atrim=duration={total_dur}[aout]",
-                 "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", mixed_audio],
-                capture_output=True, text=True,
+            qa = _mix_voice_over_bgm(
+                bgm, voice_track, total_dur,
+                margin_db=p["bgm_margin_db"], mixed_audio=mixed_audio,
+                legacy_bgm_vol=p["bgm_vol"],
             )
-            if r.returncode != 0:
-                raise RuntimeError(f"ffmpeg mix failed (exit {r.returncode}): {r.stderr[-800:]}")
+            log.info(
+                "VOICEMIX "
+                f"voice_in={qa.get('voice_in')} bgm_in={qa.get('bgm_in')} "
+                f"gain_v={qa.get('voice_gain')} gain_b={qa.get('bgm_gain')} "
+                f"margin={qa.get('margin_db')} final={qa.get('final_i')}LUFS "
+                f"tp={qa.get('final_tp')} {qa.get('verdict')}"
+            )
         else:
-            # MUSIC-ONLY PATH: BGM @ 100% vol, looped/padded to total_dur.
-            # If bgm_replace_path is set, this is the new track. Otherwise
-            # the source's original mix is passed through as-is.
-            log.info(f"Music-only: {os.path.basename(bgm)} @ 100% vol → {total_dur:.2f}s")
+            # MUSIC-ONLY PATH: BGM looped/padded to total_dur. A replacement
+            # track is loudness-normalized to MUSIC_TARGET_LUFS (royalty-free
+            # masters vary -7..-20 LUFS); the source's own mix passes through
+            # untouched to preserve its original level.
+            music_gain = 0.0
+            if bgm_replace_path:
+                bmeas = measure_loudness(bgm)
+                if bmeas is not None:
+                    music_gain = _clamp(MUSIC_TARGET_LUFS - bmeas["input_i"], -20.0, 20.0)
+            log.info(f"Music-only: {os.path.basename(bgm)} gain={music_gain:+.1f}dB → {total_dur:.2f}s")
             r = subprocess.run(
                 ["ffmpeg", "-y",
                  "-stream_loop", "-1", "-i", bgm,
-                 "-af", f"apad=whole_dur={total_dur:.3f}",
+                 "-af", f"volume={music_gain:+.2f}dB,apad=whole_dur={total_dur:.3f},"
+                        f"alimiter=limit=0.891:level=false",
                  "-t", f"{total_dur:.3f}",
                  "-c:a", "aac", "-b:a", "192k", mixed_audio],
                 capture_output=True, text=True,
             )
             if r.returncode != 0:
                 raise RuntimeError(f"ffmpeg audio failed (exit {r.returncode}): {r.stderr[-800:]}")
+            fmeas = measure_loudness(mixed_audio)
+            log.info(f"MUSICMIX final={fmeas['input_i'] if fmeas else None}LUFS "
+                     f"tp={fmeas['input_tp'] if fmeas else None}")
 
         # 6. Video transforms (side-blur aware, aspect-aware)
         # Order: detect baked padding first → compute EFFECTIVE aspect on real
