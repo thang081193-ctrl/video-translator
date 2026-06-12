@@ -23,6 +23,27 @@ import sys, io, os
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 
+# ---- low-impact throttle (keep the foreground PC usable) -------------------
+# Demucs/torch grab EVERY core per process; with N parallel workers that
+# oversubscribes the box into thrash (that's the "lag everything" symptom). Cap
+# per-process math threads BEFORE torch is imported, and drop our scheduling
+# priority. This block runs at module load, so it applies to the main process
+# AND every spawned worker (Windows re-imports this module per worker). Override
+# with env, e.g. OMP_NUM_THREADS=8, or bump --workers, when you want full tilt.
+for _k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+           "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_k, "3")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+try:
+    if sys.platform == "win32":
+        import ctypes as _ct
+        _ct.windll.kernel32.SetPriorityClass(
+            _ct.windll.kernel32.GetCurrentProcess(), 0x00004000)  # BELOW_NORMAL
+    else:
+        os.nice(10)
+except Exception:
+    pass
+
 import argparse
 import csv
 import json
@@ -889,7 +910,7 @@ def main():
     p.add_argument("--outro-woman", default=None, help="outro for female talking-heads")
     p.add_argument("--trim-endcard", action="store_true")
     p.add_argument("--bgm-pool", default=None)
-    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--workers", type=int, default=3)  # throttled: 3 workers x 3 threads ~= 9 cores, leaves headroom
     p.add_argument("--seed-base", type=int, default=0)
     p.add_argument("--no-sign", action="store_true",
                    help="do NOT stamp the processed signature onto outputs/sources")
