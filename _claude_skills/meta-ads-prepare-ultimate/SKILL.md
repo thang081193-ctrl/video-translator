@@ -269,44 +269,11 @@ Writes into `<dst>`:
 - `00_CAMPAIGNS_README.txt` — **visual map of the campaign tree** (each campaign + its angle ad-sets + ad counts + which countries to target + Meta setup + the BGM-swap scaling note). This is the human-readable index — open it instead of squinting at CSVs.
 - **BGM license check** — warns if any BGM-only video kept SOURCE BGM (Meta copyright-flag risk; swap to a royalty-free Pixabay pool).
 
-## Running on Vast.ai (GPU offload — same skill, heavy phases go remote)
-
-meta-ultimate is **local-first**, but the GPU-heavy subcommands can be offloaded to a
-rented Vast.ai GPU while the Opus-reasoning + translate steps stay in **THIS chat**
-($0 — NEVER route translation to Gemini). The local PC stays free (no Whisper /
-Demucs / render load lagging it). It's the **same `run.py`** — git-tracked, so after
-`git pull` it already exists on Vast at `/workspace/video-translator/`; the job folder
-(incl. `_ultimate/manifest.json`) hops between machines with `scripts/vastai-sync.sh`.
-Convention: job lives at `/workspace/jobs/<batch>` on Vast, `<local-batch-dir>` locally.
-
-**Which phase runs where:**
-| phase | runs on | why |
-|---|---|---|
-| `scan` (Whisper) | **Vast (GPU)** | transcription is the heaviest step |
-| Step 2 manifest-fill (vertical / language / copy / translation) | **this chat (Opus)** | edits `manifest.json`; $0, never Gemini |
-| `bgm-suggest`, `organize` | either | pure reasoning / file moves — local is fine |
-| `dub`, `voiceover` (Demucs + Edge-TTS) | **Vast (GPU)** | source separation + TTS render |
-| `brandpass` (resize 9:16 + render + BGM swap) | **Vast (GPU)** | the encode is GPU-bound |
-| `package`, `retrim_endcards` | **local** | CSV / QA + cv2 card-detect, light |
-
-**Prereqs:** instance from /vastai-setup **manual install** path (repo at
-`/workspace/video-translator`, system `python3`). Make the repo current first:
-`ssh -p <PORT> root@<HOST> 'cd /workspace/video-translator && git pull --ff-only'`.
-(Docker setup needs `-v /workspace/jobs:/workspace/jobs` + a `docker exec` prefix, or
-just use the manual install — simpler.) `<HOST>` `<PORT>` = Vast dashboard → SSH button.
-
-**Flow (each remote `run.py` call: `PYTHONIOENCODING=utf-8 python3 -u`):**
-1. **Up sources:** `bash scripts/vastai-sync.sh up <HOST> <PORT> "<local-batch-dir>" /workspace/jobs/<batch>` — OR download Meta-Ad-Library URLs directly on Vast (datacenter bandwidth beats a home upload).
-2. **scan on Vast:** `ssh -p <PORT> root@<HOST> 'cd /workspace/video-translator && PYTHONIOENCODING=utf-8 python3 -u _claude_skills/meta-ads-prepare-ultimate/run.py scan --src /workspace/jobs/<batch> --whisper small'`.
-3. **Manifest round-trip (the $0 step):** `down` `/workspace/jobs/<batch>/_ultimate/manifest.json` → Opus fills vertical / language / copy / translations IN CHAT (Step 2) → `up` the manifest back.
-4. **dub / voiceover / brandpass on Vast:** same `run.py <cmd> --src /workspace/jobs/<batch> ...` over SSH.
-5. **Pull deliverables + finish locally:** tar the campaign tree on Vast first (one stream beats thousands of scp round-trips) — `ssh ... 'cd /workspace/jobs/<batch> && tar -cf out.tar <dst-name>'` → `vastai-sync.sh down` → untar → run `package` + `retrim_endcards.py all <dst>` + `qa_voice_mix.py` locally.
-
-**Pure dub-only batch?** Use the `/vast-meta-ultimate` command instead — the lean
-super-saiyan (`extract.py` / `apply.py`) variant for "just localize the voice", no
-classify / organize / brandpass. This section is for running the **FULL** ultimate
-pipeline with its GPU phases offloaded. See `reference_vastai_brandpass.md` (memory)
-for the torch cu124 pin + gotchas (faster-whisper import, GPU-snapshot false alarm).
+> **Need to offload the GPU-heavy phases to a rented Vast.ai GPU** (local PC can't
+> run, or you don't want Whisper/Demucs/render lagging it)? That's the
+> **`vast-meta-ultimate`** skill — the local-extended variant that runs scan / dub /
+> voiceover / brandpass on Vast, keeps translate $0 in-chat, and auto-destroys the
+> instance when done. This skill (`meta-ads-prepare-ultimate`) stays **fully local**.
 
 ## Processed-file signature (recognize done work, skip on re-runs)
 
