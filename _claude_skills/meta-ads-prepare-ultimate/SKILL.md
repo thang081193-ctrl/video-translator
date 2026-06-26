@@ -275,6 +275,22 @@ Writes into `<dst>`:
 > voiceover / brandpass on Vast, keeps translate $0 in-chat, and auto-destroys the
 > instance when done. This skill (`meta-ads-prepare-ultimate`) stays **fully local**.
 
+> ⚠️ **DESTROY GATE — MANDATORY VISUAL QA before `vastai destroy`** (learned the hard way
+> 2026-06-26, see `docs/lessons/2026-06-26-vast-batch-outro-qa-postmortem.md`).
+> Audio/loudness/count QA does **NOT** detect a missing or competitor end-card/outro.
+> Before destroying any rented instance:
+> 1. Download the deliverables AND confirm the **source videos exist off-box** (destroy = the
+>    only copy is gone → no clean re-run possible).
+> 2. Build an **end-frame montage of EVERY pack** (last frame, sample across every lang/folder)
+>    and eyeball: brand outro present + correct + no competitor end-card. Then (ideally) user sign-off.
+> 3. **Verify the outro asset** before the run: `ffprobe` duration>0, plays, sane size
+>    (a sub-~200 KB `outro.mp4` is a red flag — it's likely truncated).
+> 4. Do **NOT** run a separate `retrim_endcards` after brandpass already appended the outro —
+>    it strips the brand outro (inconsistently). brandpass `--trim-endcard` already handles the
+>    source end-card.
+> Recovery if it slips through: `append_outro_list.py` (append) / `score_trim_append.py`
+> (trim competitor card + append), concat-filter, idempotent done-log — patch the finals locally.
+
 ## Processed-file signature (recognize done work, skip on re-runs)
 
 Every full run **stamps a hidden mp4 `comment` tag** into each output (and source)
