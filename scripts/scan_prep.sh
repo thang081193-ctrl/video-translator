@@ -11,6 +11,7 @@ ROOT=/workspace/video-translator
 RUN="$ROOT/_claude_skills/meta-ads-prepare-ultimate/run.py"
 TAIL=/workspace/_tail; mkdir -p "$TAIL"
 export VIDEO_TRANSLATOR_ROOT="$ROOT" PYTHONIOENCODING=utf-8
+. "$ROOT/scripts/box_python.sh" 2>/dev/null || true   # make python3 the torch venv (non-login ssh)
 cd "$ROOT" || exit 9
 say(){ echo "===== [$(date +%F_%H:%M:%S)] $* ====="; date +%s > "$TAIL/heartbeat"; }
 

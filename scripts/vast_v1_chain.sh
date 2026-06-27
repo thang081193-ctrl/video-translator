@@ -33,6 +33,7 @@ say(){ echo "===== [$(date +%F_%H:%M:%S)] $* ====="; hb; }
 BP_WORKERS="${V1_BP_WORKERS:-12}"
 
 export VIDEO_TRANSLATOR_ROOT="$ROOT" PYTHONIOENCODING=utf-8
+. "$ROOT/scripts/box_python.sh" 2>/dev/null || true   # make python3 the torch venv (non-login ssh)
 cd "$ROOT" || exit 9
 
 rc=0

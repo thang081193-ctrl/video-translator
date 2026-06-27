@@ -41,6 +41,7 @@ DUB_WORKERS="${V2_DUB_WORKERS:-6}"
 BP_WORKERS="${V2_BP_WORKERS:-12}"
 
 export VIDEO_TRANSLATOR_ROOT="$ROOT" PYTHONIOENCODING=utf-8
+. "$ROOT/scripts/box_python.sh" 2>/dev/null || true   # make python3 the torch venv (non-login ssh)
 cd "$ROOT" || exit 9
 
 rc=0

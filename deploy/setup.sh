@@ -28,6 +28,12 @@ REQ="${REQ:-$HERE/../requirements-vast.txt}"
 
 say(){ echo "===== [setup] $* ====="; }
 
+# ---- 0) make python3/pip the torch venv (vast images hide it from non-login ssh) ----
+# Must run BEFORE the torch verify + `pip install` so we verify AND install into the
+# venv that actually has CUDA torch, not the bare system python3.
+. "$HERE/../scripts/box_python.sh" 2>/dev/null || . "$HERE/scripts/box_python.sh" 2>/dev/null || true
+say "python3 -> $(command -v python3)  (torch venv if image hid it)"
+
 # ---- 1) apt: fonts + ffmpeg + build-essential + jq -------------------------
 # fonts-noto-cjk -> CJK ; fonts-noto-extra -> Bengali/Thai/Devanagari/Arabic/etc.
 say "apt: ffmpeg + fonts + build-essential + jq"

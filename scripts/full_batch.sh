@@ -26,6 +26,7 @@ BGM="$ROOT/_bgm"
 CHAIN2="$ROOT/scripts/vast_v2_chain.sh"   # voiced V2 chain (lives on box; audit for retrim-after-outro)
 CHAIN1="$ROOT/scripts/vast_v1_chain.sh"   # BGM-only V1 chain (lives on box)
 export VIDEO_TRANSLATOR_ROOT="$ROOT" PYTHONIOENCODING=utf-8
+. "$ROOT/scripts/box_python.sh" 2>/dev/null || true   # make python3 the torch venv (non-login ssh)
 cd "$ROOT" || exit 9
 
 TAIL=/workspace/_tail

@@ -16,6 +16,7 @@ TAIL=/workspace/_tail; mkdir -p "$TAIL"
 PACK="${1:?pack}"; LANGS="${2:?langs}"; VOBANK="${3:?vobank}"; APPCFG="${4:?appcfg}"; WM="${5:?watermark}"; OUTRO="${6:?outro}"
 JOB=/workspace/jobs/$PACK
 export VIDEO_TRANSLATOR_ROOT="$ROOT" PYTHONIOENCODING=utf-8
+. "$ROOT/scripts/box_python.sh" 2>/dev/null || true   # make python3 the torch venv (non-login ssh)
 cd "$ROOT" || exit 9
 say(){ echo "===== [$(date +%F_%H:%M:%S)] $* ====="; date +%s > "$TAIL/heartbeat"; }
 mark_fail(){ printf '{"status":"FAIL","fail":1,"reason":"%s","finished_at":%s}\n' "$1" "$(date +%s)" > "$TAIL/BATCH.DONE.tmp"; mv -f "$TAIL/BATCH.DONE.tmp" "$TAIL/BATCH.DONE"; }
