@@ -29,9 +29,12 @@
 # ---- ASR / audio -----------------------------------------------------------
 faster-whisper==1.0.3        # CPU int8 in scan+QA; GPU only for brandpass gate
 ctranslate2==4.4.0           # faster-whisper backend
-demucs==4.0.1                # PINNED: <4.0 has no demucs.api.Separator -> silent slow path
+demucs==4.0.1                # NOTE: 4.0.1 from pip ships WITHOUT demucs.api -> pipeline uses its
+                             # demucs.separate subprocess fallback (separator.py handles this).
 soundfile==0.12.1
-edge-tts==6.1.12             # cloud TTS, no offline fallback -> residual SPOF (cache + backoff in code)
+edge-tts>=7.2.8              # cloud TTS SPOF. MUST be >=7.x: 6.x 403s on MS's Sec-MS-GEC token
+                             # handshake. Floating (not ==) so a new box pulls the latest fix when
+                             # MS next rotates the token scheme; setup.sh also upgrade-retries on 403.
 
 # ---- OPTIONAL belt-and-suspenders (NOT the headline fix) -------------------
 # AUDIT correction: nvidia-cublas/cudnn-cu12 are NOT the #1 critical fix the older

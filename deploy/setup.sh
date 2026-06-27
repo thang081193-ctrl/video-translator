@@ -83,29 +83,52 @@ for m in tags:
     WhisperModel(m, device="cpu", compute_type="int8")
     print("whisper", m, "ok", flush=True)
 
-from demucs.api import Separator
-Separator("htdemucs")
+# demucs 4.0.1 from pip ships WITHOUT `demucs.api` (the pipeline knows this and
+# falls back to the demucs.separate subprocess). get_model() is the canonical,
+# always-present cache-warm; only fall back to the api Separator on layouts that
+# somehow have api but not pretrained.
+try:
+    from demucs.pretrained import get_model
+    get_model("htdemucs")
+except Exception:
+    from demucs.api import Separator
+    Separator("htdemucs")
 print("demucs htdemucs ok", flush=True)
 
 import easyocr
-# detector.py routes zh->ch_sim, plus ja, ko, and en/vi. Thai is NOT requested
-# (Thai text routes to the 'en' reader), so do NOT prefetch a 'th' pack.
-easyocr.Reader(["en", "vi", "ch_sim", "ja", "ko"])
-print("easyocr en,vi,ch_sim,ja,ko ok", flush=True)
+# easyocr FORBIDS combining multiple non-Latin scripts in one Reader (ch_sim/ja/ko
+# are each "only compatible with English"). pipeline/ocr/detector.py builds readers
+# pairwise as [src_lang, "en"], so warm the model cache the SAME way — one Reader
+# per group — not all langs at once. Thai is NOT prefetched (routes to the en reader).
+for grp in (["en"], ["ch_sim", "en"], ["ja", "en"], ["ko", "en"], ["vi", "en"]):
+    easyocr.Reader(grp, gpu=False)
+    print("easyocr", ",".join(grp), "ok", flush=True)
 PY
 
 # ---- 5) edge-tts reachability smoke ----------------------------------------
-# Fail HERE (no model to cache) rather than mid-render. Non-fatal-by-design? No:
-# edge-tts is the dub/voiceover SPOF, so a build-time outage should be surfaced.
+# Fail HERE (no model to cache) rather than mid-render. edge-tts is the
+# dub/voiceover SPOF. The #1 cause of a smoke failure is MS rotating the
+# Sec-MS-GEC token handshake, which older edge-tts can't sign (403 on the
+# wss handshake). So: smoke -> if it fails, UPGRADE edge-tts and retry once
+# (self-heal against the next token rotation), then hard-fail if still down.
 say "edge-tts reachability smoke"
-python3 - <<'PY'
-import asyncio, edge_tts
+edge_smoke() {
+  python3 - <<'PY'
+import asyncio, sys, edge_tts
 async def _smoke():
     c = edge_tts.Communicate("hi", "en-US-AriaNeural")
     await c.save("/tmp/_edge_tts_smoke.mp3")
-asyncio.run(_smoke())
-print("edge-tts reachable")
+try:
+    asyncio.run(_smoke()); print("edge-tts reachable (", edge_tts.__version__, ")")
+except Exception as e:
+    print("edge-tts smoke FAILED:", type(e).__name__, str(e)[:160], file=sys.stderr); sys.exit(1)
 PY
+}
+if ! edge_smoke; then
+  say "edge-tts smoke failed -> upgrading edge-tts (likely a Sec-MS-GEC token rotation) and retrying"
+  pip install --quiet --upgrade edge-tts
+  edge_smoke || { echo "FATAL: edge-tts unreachable even after upgrade (MS 403 / datacenter IP block?)"; exit 5; }
+fi
 rm -f /tmp/_edge_tts_smoke.mp3
 
 say "setup complete"
