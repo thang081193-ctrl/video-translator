@@ -6,6 +6,7 @@ with subprocess fallback for older demucs versions that don't expose
 """
 
 import json
+import multiprocessing as mp
 import os
 import subprocess
 import threading
@@ -16,6 +17,14 @@ from pipeline.errors import DegradedError
 from pipeline.logger import get_logger
 
 log = get_logger("Dub")
+
+# Hard wall-clock cap for a single Demucs separation. The demucs call is in-process
+# (no subprocess timeout to lean on), so a pathological/short clip can hang htdemucs
+# forever and stall the whole batch. We run the separation in a spawned child process
+# and join() with this timeout; on expiry we terminate the child and raise
+# DegradedError so brand_pass reroutes the clip to the music-only / TTS-only path.
+# Override via env DEMUCS_TIMEOUT (seconds).
+DEMUCS_TIMEOUT = int(os.environ.get("DEMUCS_TIMEOUT", "900"))
 
 
 # ─── In-process Separator cache (P6.A) ───────────────────────────────────────
@@ -135,6 +144,21 @@ def _separate_via_api(separator, audio_path: str, demucs_dir: str, model: str) -
         cpu_sep.separate_audio_file(audio_path, str(demucs_dir))
 
 
+def _run_separation(audio_path: str, demucs_dir: str, model: str) -> None:
+    """Do the actual separation: try the in-process API, else subprocess.
+
+    Pulled out as a module-level function so it can run unmodified both in the
+    current process and inside a spawned child (spawn requires a picklable,
+    importable target — no closures/locals).
+    """
+    _install_soundfile_save_patch()
+    separator = _get_separator(model)
+    if separator is not None:
+        _separate_via_api(separator, audio_path, demucs_dir, model)
+    else:
+        _separate_via_subprocess(audio_path, demucs_dir, model)
+
+
 def separate_audio(audio_path: str, demucs_dir: str, model: str = "htdemucs") -> dict[str, str]:
     """
     Separate audio into vocals and accompaniment using Demucs.
@@ -147,35 +171,71 @@ def separate_audio(audio_path: str, demucs_dir: str, model: str = "htdemucs") ->
     paths live inside `demucs_dir`; read them BEFORE the caller exits its
     context manager or the files will be cleaned up.
 
-    Tries the in-process `demucs.api.Separator` cache first (fast — model
-    stays loaded across jobs). Falls back to subprocess `demucs.separate.main`
-    if the API is not available in the installed demucs version.
+    The separation itself runs in a SPAWNED child process joined with a
+    DEMUCS_TIMEOUT wall-clock cap — the in-process demucs call has no timeout
+    of its own, so a pathological/short clip could otherwise hang htdemucs
+    forever and stall the batch. On timeout the child is terminated and a
+    DegradedError is raised so callers (brand_pass) reroute to the music-only /
+    TTS-only path instead of aborting. The child uses the in-process
+    `demucs.api.Separator` (fast) or the subprocess fallback for older demucs.
     """
-    log.info(f"Separating audio with Demucs ({model})")
-    _install_soundfile_save_patch()
+    log.info(f"Separating audio with Demucs ({model}, timeout={DEMUCS_TIMEOUT}s)")
 
+    # spawn: a fresh interpreter so a wedged native demucs thread can be killed
+    # cleanly (fork would inherit torch/CUDA state and may not terminate).
+    ctx = mp.get_context("spawn")
+    proc = ctx.Process(
+        target=_run_separation,
+        args=(audio_path, demucs_dir, model),
+        name="demucs-separate",
+    )
     try:
-        separator = _get_separator(model)
-        if separator is not None:
-            _separate_via_api(separator, audio_path, demucs_dir, model)
-        else:
-            _separate_via_subprocess(audio_path, demucs_dir, model)
+        proc.start()
+        proc.join(timeout=DEMUCS_TIMEOUT)
     except Exception as e:
-        # Both paths failed — surface as DegradedError so callers can
-        # eventually skip source separation and fall back to TTS-only
-        # mode instead of aborting the whole job. Behavior preserved
-        # from P5.1.
+        # Failure to even spawn/join — treat as degraded so the job can continue.
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(5)
         raise DegradedError(
             f"Demucs source separation failed: {e}", feature="demucs"
         ) from e
 
+    if proc.is_alive():
+        # Timed out — kill the wedged child and degrade.
+        log.warning(
+            f"Demucs separation exceeded {DEMUCS_TIMEOUT}s — terminating child and degrading"
+        )
+        proc.terminate()
+        proc.join(10)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(5)
+        raise DegradedError(
+            f"Demucs source separation timed out after {DEMUCS_TIMEOUT}s",
+            feature="demucs",
+        )
+
+    if proc.exitcode != 0:
+        # Child raised / crashed — surface as DegradedError so callers can skip
+        # source separation and fall back to TTS-only instead of aborting the job.
+        raise DegradedError(
+            f"Demucs source separation failed (child exit {proc.exitcode})",
+            feature="demucs",
+        )
+
     base_name = os.path.splitext(os.path.basename(audio_path))[0]
     stem_dir = os.path.join(demucs_dir, model, base_name)
-
-    return {
+    result = {
         "vocals": os.path.join(stem_dir, "vocals.wav"),
         "no_vocals": os.path.join(stem_dir, "no_vocals.wav"),
     }
+    # Defensive: a clean child exit but missing stems is still a degraded result.
+    if not (os.path.exists(result["vocals"]) and os.path.exists(result["no_vocals"])):
+        raise DegradedError(
+            "Demucs reported success but stem files are missing", feature="demucs"
+        )
+    return result
 
 
 def get_audio_duration(path: str) -> float:

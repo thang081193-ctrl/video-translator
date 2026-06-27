@@ -1,0 +1,61 @@
+# requirements-vast.txt
+# ---------------------------------------------------------------------------
+# Pinned dependency lock for the Vast.ai cu130 box (vastai/pytorch:cuda-13.1.2-auto).
+# Reconciled to the REAL import audit in _vast_pull/AUDIT_final.md Part 2a.
+#
+# Source of truth for what is actually imported:
+#   - faster-whisper / ctranslate2  : scan (manifest.py, device='cpu' int8) + QA (qa_voice_mix.py 'tiny')
+#                                     + the brandpass GPU voice-gate (transcribe.py)
+#   - demucs.api.Separator          : pipeline/dub/separator.py  (REQUIRES >=4.0 for the .api module)
+#   - edge_tts                      : pipeline/dub/tts.py, voiceover  (cloud TTS — SPOF, no offline fallback)
+#   - easyocr / cv2 / PIL / numpy   : pipeline/ocr (detector maps zh->ch_sim, ja, ko + en/vi)
+#   - soundfile                     : audio I/O
+#   - fastapi / uvicorn / multipart : web_app serving
+#   - google-genai                  : translation provider factory
+#   - python-dotenv                 : .env loading
+#
+# Versions are reconciled to the audit's recommended pins; freeze with
+# `pip freeze` after the first successful cu130 build to lock transitives.
+# ---------------------------------------------------------------------------
+
+# ---- Torch: DO NOT pin / reinstall here ------------------------------------
+# The vastai/pytorch:cuda-13.1.2-auto base image ALREADY ships torch + torchaudio
+# built for cu130. Reinstalling from the cu121 index is the live Dockerfile:38 bug
+# and silently CPU-falls the brandpass voice-gate + Demucs on a cu130 box.
+# setup.sh VERIFIES torch.cuda.is_available() (exit 7) and NEVER pip-reinstalls it.
+# If you ever must reinstall, use --index-url https://download.pytorch.org/whl/cu130
+# (torchaudio 2.12 is absent on the cu130 index per memory — use 2.11.x).
+
+# ---- ASR / audio -----------------------------------------------------------
+faster-whisper==1.0.3        # CPU int8 in scan+QA; GPU only for brandpass gate
+ctranslate2==4.4.0           # faster-whisper backend
+demucs==4.0.1                # PINNED: <4.0 has no demucs.api.Separator -> silent slow path
+soundfile==0.12.1
+edge-tts==6.1.12             # cloud TTS, no offline fallback -> residual SPOF (cache + backoff in code)
+
+# ---- OPTIONAL belt-and-suspenders (NOT the headline fix) -------------------
+# AUDIT correction: nvidia-cublas/cudnn-cu12 are NOT the #1 critical fix the older
+# audits claimed. faster-whisper runs device='cpu' in every scan/QA call site, so
+# it needs no CUDA libs. The ONLY GPU consumers (brandpass voice-gate + Demucs) use
+# the cu130 torch wheel's OWN bundled cublas/cudnn. Include these two ONLY as a
+# fallback if that wheel ever fails to resolve cublas/cudnn itself; remove if the
+# torch cu130 wheel provides them (it normally does).
+# nvidia-cublas-cu12         # optional
+# nvidia-cudnn-cu12          # optional
+
+# ---- OCR / vision ----------------------------------------------------------
+easyocr==1.7.2
+opencv-python-headless==4.10.0.84
+Pillow==10.4.0
+numpy==1.26.4                # <2 REQUIRED for easyocr/opencv ABI compatibility
+
+# ---- web / serving ---------------------------------------------------------
+fastapi==0.115.5
+uvicorn==0.32.1
+python-multipart==0.0.12
+pydantic==2.9.2              # PINNED (was uncontrolled transitive via fastapi)
+aiofiles==24.1.0
+
+# ---- providers / misc ------------------------------------------------------
+google-genai==1.0.0
+python-dotenv==1.0.1

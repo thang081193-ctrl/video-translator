@@ -1,0 +1,49 @@
+# deploy/Dockerfile.vast
+# ---------------------------------------------------------------------------
+# Vast.ai cu130 image for the Meta-Ads render box.
+#
+# Unlike the root Dockerfile (which pins cu121 on an nvidia/cuda:12.3 base —
+# the live skew bug in AUDIT_final.md), this image builds on the Vast.ai cu130
+# PyTorch base, which ALREADY ships torch + torchaudio for CUDA 13.1. We never
+# reinstall torch; deploy/setup.sh VERIFIES torch.cuda and exits 7 if it isn't
+# available (the cu121-on-cu130 silent-CPU trap).
+#
+# setup.sh bakes every model the code loads (whisper tiny+small+medium, demucs
+# htdemucs, easyocr en/vi/ch_sim/ja/ko) and the fonts (CJK + Thai) into the
+# image, so the first render is fully offline — no lazy mid-batch download.
+#
+# Build (locally — avoids the GHA 60-min timeout on large model pulls):
+#   DOCKER_BUILDKIT=1 docker build -f deploy/Dockerfile.vast -t video-translator-vast .
+#
+# To also bake the optional large-v3 whisper model:
+#   --build-arg PREFETCH_LARGE_V3=1
+# ---------------------------------------------------------------------------
+
+FROM vastai/pytorch:cuda-13.1.2-auto
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
+    HF_HUB_DOWNLOAD_TIMEOUT=600
+
+# Optional: bake whisper large-v3 too (huge; only if you run --whisper large-v3)
+ARG PREFETCH_LARGE_V3=0
+ENV PREFETCH_LARGE_V3=${PREFETCH_LARGE_V3}
+
+WORKDIR /workspace/video-translator
+
+# Copy the lock + setup first so the heavy apt/pip/model-prefetch layer is
+# cached and only re-runs when one of these two files changes.
+COPY requirements-vast.txt ./requirements-vast.txt
+COPY deploy/setup.sh ./deploy/setup.sh
+
+# ONE idempotent pass: apt (ffmpeg + CJK/Thai fonts + build-essential + jq),
+# VERIFY torch cuda (never reinstall), pip the lock, prefetch + BAKE all models,
+# edge-tts reachability smoke. Models land in /root/.cache + /root/.EasyOCR and
+# are committed into the image layer.
+RUN bash ./deploy/setup.sh
+
+# Copy the rest of the app (after .dockerignore filters tests/.git/secrets).
+COPY . /workspace/video-translator
+
+CMD ["bash"]

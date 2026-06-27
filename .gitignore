@@ -39,3 +39,7 @@ htmlcov/
 # Claude Code user-local settings
 .claude/settings.local.json
 _temp_qa/
+
+# local scratch / deliverables (never commit — 20GB+)
+_deliverables_*/
+_vast_pull/

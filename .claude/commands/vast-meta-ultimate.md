@@ -1,11 +1,14 @@
 ---
-description: "Local-extended twin of meta-ads-prepare-ultimate: runs the SAME full pipeline but offloads every GPU-heavy phase (scan/Whisper, dub/Demucs+TTS, voiceover, brandpass/render) to a rented Vast.ai GPU, keeps the translate step $0 in THIS chat (Claude, never Gemini), and AUTO-DESTROYS the Vast instance when the batch is verified done. Use when the local PC can't run the GPU work or you don't want it lagging the machine."
+description: "Local-extended twin of meta-ads-prepare-ultimate: runs the SAME full pipeline but offloads every GPU-heavy phase (scan/Whisper, dub/Demucs+TTS, voiceover, brandpass/render) to a rented Vast.ai GPU, keeps the translate step $0 in THIS chat (Claude, never Gemini), and STOPS (reversible, never auto-destroy) the Vast instance when the batch is verified done — destroy is a human-typed token after visual QA. Use when the local PC can't run the GPU work or you don't want it lagging the machine."
 ---
 
 `vast-meta-ultimate` is **`meta-ads-prepare-ultimate` extended to Vast.ai** — same skill,
 same `run.py`, same manifest. The ONLY difference vs the local skill: the GPU-heavy phases
-run on a rented Vast GPU instead of this PC, and the instance is **auto-destroyed** at the
-end. The LLM-reasoning + translate steps stay in **THIS chat** (Claude, $0 — NEVER route
+run on a rented Vast GPU instead of this PC, and the instance is **STOPPED** (reversible) at
+the end — **never auto-destroyed**. Destroy is a deliberate, human-typed token issued via
+`scripts/human_destroy.sh` AFTER visual outro/branding QA (audio QA is blind to a missing
+brand outro — see the 2026-06-26 post-mortem). The LLM-reasoning + translate steps stay in
+**THIS chat** (Claude, $0 — NEVER route
 translation to Gemini). The local PC stays free (no Whisper/Demucs/render load lagging it).
 
 Read `_claude_skills/meta-ads-prepare-ultimate/SKILL.md` for the pipeline itself (the 6 steps,
@@ -114,25 +117,44 @@ python _claude_skills/meta-ads-prepare-ultimate/retrim_endcards.py all "<local-b
 python _claude_skills/meta-ads-prepare/qa_voice_mix.py "<local-batch-dir>/_out" --whisper --expect-voice
 ```
 
-## Phase 5 — AUTO-DESTROY the Vast instance
+## Phase 5 — STOP only (NEVER auto-destroy)
 
-**Hard gate — destroy is IRREVERSIBLE (kills the instance + its disk).** Only proceed once
-ALL of these hold, else you lose the GPU work:
-1. The deliverables tar downloaded + untarred locally (the `_out/` tree exists locally).
-2. `package` QA gate passed (`qa_report.csv` → 0 FAIL) and the local file count matches the
-   expected output count.
-3. Nothing else still running on the instance you need.
+This skill and ANY box-side script may ONLY `vastai stop` (reversible — keeps the disk and
+the rendered tree; just pauses billing). **`vastai destroy` is FORBIDDEN to every
+script/agent in this flow.** The 2026-06-26 post-mortem proved a green *audio* QA gate is
+**blind to a missing brand outro** — exactly the defect that shipped — so destroy must not key
+off it. Destroy is a **HUMAN** action, performed only after a human eyeballs the end-frame
+montage.
 
-When the gate passes, destroy automatically:
+When the deliverables verify (deliverables + source set pulled locally, `package` QA → 0 FAIL,
+local count matches expected), STOP the instance — do NOT destroy:
 
 ```bash
-vastai destroy instance <INSTANCE_ID>
-vastai show instances          # confirm it's gone (no longer listed)
+vastai stop instance <INSTANCE_ID>          # reversible; disk + renders survive
+vastai show instance <INSTANCE_ID> --raw    # confirm actual_status in stopped/exited/offline
 ```
-This stops billing immediately. (Use `vastai stop instance <INSTANCE_ID>` only if the user
-explicitly wants to KEEP the disk for a follow-up run — the default for this skill is
-**destroy**, per its contract.) If the deliverables did NOT verify, do **not** destroy — keep
-the instance and re-pull / re-run the failed phase first.
+
+If the deliverables did NOT verify, do **not** stop yet — re-pull / re-run the failed phase
+first (a stopped box can be `vastai start instance <INSTANCE_ID>` to resume).
+
+### Destroy is a separate, human-typed gate (after visual QA)
+
+Destroy is IRREVERSIBLE (kills the instance + its disk). It happens ONLY after a human:
+1. Confirmed the local pull is complete (deliverables + manifest-driven source set + montage
+   all on local disk).
+2. **OPENED the end-frame montage + `outro_report.json` and visually confirmed the brand
+   outro on EVERY pack** with zero unexplained `suspect_no_outro`.
+
+Then the operator hand-types the instance id AND the literal word `DESTROY`:
+
+```bash
+bash scripts/human_destroy.sh <INSTANCE_ID> DESTROY
+```
+
+No script/agent may synthesize that `DESTROY` token or call `vastai destroy` on its own — the
+only file in this repo permitted to contain the string `vastai destroy` is
+`scripts/human_destroy.sh`. Any orchestrator/tail must assert its argv/state never contains
+the string `destroy`.
 
 ## Pure dub-only batch (lean shortcut)
 
