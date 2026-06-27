@@ -111,7 +111,7 @@ bash scripts/vastai-sync.sh up <HOST> <PORT> \
 (`organize` + `bgm-suggest` can run locally or on Vast — they're light. Run `organize` where
 the files are about to be processed; for this flow, on Vast just before dub/brandpass.)
 
-## Phase 2 — autonomous render + self-PARK (zero babysitting)
+## Phase 3 — autonomous render + self-PARK (zero babysitting)
 
 Once the manifest is filled, launch the hardened batch and **go to sleep**. `full_batch.sh`
 gates each pack on `run.py status --strict` (refuses to start if the manifest is under-filled —
@@ -131,7 +131,7 @@ Edge-TTS needs outbound internet (Vast has it); the voice-audibility gate (`VOIC
 built in. The box self-STOPs minutes after the work + QA-montage finish; the operator is not
 needed until the pull.
 
-## Phase 3 — pull (checked invariant) + visual QA (the human gate, any time later)
+## Phase 4 — pull (checked invariant) + visual QA (the human gate, any time later)
 
 One command pulls deliverables **and the manifest-driven source set** (so a re-run never
 needs re-translation) **and** the end-frame QA montage, PIPESTATUS-checked, with per-pack count
