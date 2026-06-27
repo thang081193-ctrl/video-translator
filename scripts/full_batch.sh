@@ -54,6 +54,9 @@ KEY="${CONTAINER_API_KEY:-}"
 MAXPARK=${MAXPARK:-43200}     # 12h hard wall-clock cap
 MAXIDLE=${MAXIDLE:-2700}      # 45min: must exceed the largest legit inter-mp4 gap
 if [ -n "$CID" ] && [ -n "$KEY" ]; then
+  # a NEW batch gets a FRESH stop budget: clear any stale 'stopped' from a prior park
+  # (park_timer is relaunch-safe and would otherwise no-op + never self-park).
+  python3 "$ROOT/scripts/ledger.py" set stopped false 2>/dev/null || true
   nohup bash "$ROOT/scripts/park_timer.sh" "$CID" "$KEY" "$MAXPARK" "$MAXIDLE" \
         >> "$TAIL/park_timer.log" 2>&1 &
   echo $! > "$TAIL/park_timer.pid"

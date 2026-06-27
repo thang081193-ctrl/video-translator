@@ -31,6 +31,9 @@ python3 pipeline/preflight.py --strict || { mark_fail preflight; exit 1; }
 [ -f /etc/vast.env ] && { set -a; . /etc/vast.env; set +a; }
 CID="${CONTAINER_ID:-}"; CID="${CID#C.}"; KEY="${CONTAINER_API_KEY:-}"
 if [ -n "$CID" ] && [ -n "$KEY" ]; then
+  # a NEW batch gets a FRESH stop budget: clear any stale 'stopped' from a prior
+  # park (park_timer is relaunch-safe and would otherwise no-op + never self-park).
+  python3 "$ROOT/scripts/ledger.py" set stopped false 2>/dev/null || true
   nohup bash "$ROOT/scripts/park_timer.sh" "$CID" "$KEY" "${MAXPARK:-43200}" "${MAXIDLE:-2700}" >> "$TAIL/park_timer.log" 2>&1 &
   echo $! > "$TAIL/park_timer.pid"; say "self-PARK armed (pid $(cat "$TAIL/park_timer.pid"))"
 else

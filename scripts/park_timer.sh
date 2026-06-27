@@ -68,18 +68,28 @@ do_stop(){ # <reason>
   fi
   log "STOP trigger: $1"
   local out rc
+  # WRITE-AHEAD the durable record BEFORE issuing the stop. `vastai stop` tears the
+  # container down within a few seconds, killing THIS process — any ledger write placed
+  # after the stop (or after the up-to-75s verify poll) never runs, so the durable
+  # 'stopped' record is lost. That is exactly the tail_selftest miss. Record first.
+  python3 "$HERE/ledger.py" set stopped true reason "$1" stopped_at "$(date +%s)" || true
   out="$(vastai stop instance "$CID" --api-key "$KEY" 2>&1)"; rc=$?
   log "  'vastai stop instance' rc=$rc :: ${out}"
-  if [ "$rc" -ne 0 ]; then
-    log "  STOP CMD returned rc=$rc (will still verify before alarming)"
-  fi
-  if verify_stopped; then
-    python3 "$HERE/ledger.py" set stopped true reason "$1" stopped_at "$(date +%s)" || true
-    log "  STOP CONFIRMED (ledger updated)"
+  if [ "$rc" -eq 0 ]; then
+    # API accepted the stop; teardown is imminent. Durable record already written;
+    # verify best-effort in whatever window remains (it may not complete — that's fine).
+    log "  STOP issued (ledger pre-marked stopped); verifying best-effort"
+    verify_stopped && log "  STOP CONFIRMED" \
+      || log "  (could not confirm before teardown; record already durable)"
   else
-    # fail-closed alarm: do NOT pretend success. Leave the box up; operator must intervene.
-    python3 "$HERE/ledger.py" set stop_failed true reason "$1" stop_failed_at "$(date +%s)" || true
-    log "  !!! SELF-STOP FAILED — instance $CID still running. Operator must stop it manually."
+    # the stop CALL failed -> we are probably still up. Verify; if truly still running,
+    # ROLL BACK the optimistic 'stopped' so a relaunch RETRIES instead of no-op'ing.
+    if verify_stopped; then
+      log "  STOP CONFIRMED despite rc=$rc (ledger already marks stopped)"
+    else
+      python3 "$HERE/ledger.py" set stopped false stop_failed true reason "$1" stop_failed_at "$(date +%s)" || true
+      log "  !!! SELF-STOP FAILED — instance $CID still running. Operator must stop it manually."
+    fi
   fi
   exit 0
 }
