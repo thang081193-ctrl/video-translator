@@ -34,6 +34,11 @@ LABEL="${3:-vast-tail-$OFFER}"
 IMAGE="${4:-vastai/pytorch:cuda-13.1.2-auto}"
 PUBKEY_FILE="${VAST_PUBKEY_FILE:-$HOME/.ssh/id_ed25519.pub}"
 
+# pick a python that actually runs (Windows Git Bash ships a non-functional
+# `python3` Store stub; the real one is `python`). Linux boxes have only python3.
+PY=""; for c in python python3; do if "$c" -c '' >/dev/null 2>&1; then PY="$c"; break; fi; done
+[ -n "$PY" ] || { echo "FATAL: no working python found (tried python, python3)"; exit 2; }
+
 [ -f "$PUBKEY_FILE" ] || { echo "FATAL: pubkey not found: $PUBKEY_FILE (set VAST_PUBKEY_FILE)"; exit 2; }
 PUBKEY="$(tr -d '\r\n' < "$PUBKEY_FILE")"
 case "$PUBKEY" in
@@ -67,7 +72,7 @@ echo "$OUT" >&2
 [ $RC -eq 0 ] || { echo "FATAL: vastai create failed (rc=$RC)"; exit $RC; }
 
 # `--raw` returns JSON like {"success": true, "new_contract": 1234567}
-NEWID="$(printf '%s' "$OUT" | python3 -c 'import sys,json,re
+NEWID="$(printf '%s' "$OUT" | "$PY" -c 'import sys,json,re
 raw=sys.stdin.read()
 m=re.search(r"\{.*\}",raw,re.S)
 if not m: sys.exit(1)

@@ -25,6 +25,8 @@ MAXW="${2:-600}"
 EXEC=""
 if [ "${3:-}" = "--exec" ]; then EXEC="${4:?--exec needs a command}"; fi
 KEY="${VAST_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+# Windows Git Bash ships a non-functional `python3` Store stub; real one is `python`.
+PY=""; for c in python python3; do if "$c" -c '' >/dev/null 2>&1; then PY="$c"; break; fi; done
 SSHOPTS=(-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null
          -o ConnectTimeout=12 -o BatchMode=yes -o LogLevel=ERROR -i "$KEY")
 
@@ -36,7 +38,8 @@ resolve() {  # echo "HOST PORT" or nothing
     echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"; return 0
   fi
   # fallback: parse `vastai show instance --raw`
-  vastai show instance "$ID" --raw 2>/dev/null | python3 -c 'import sys,json
+  [ -n "$PY" ] || return 1
+  vastai show instance "$ID" --raw 2>/dev/null | "$PY" -c 'import sys,json
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(1)
 h=d.get("ssh_host") or d.get("public_ipaddr") or ""
