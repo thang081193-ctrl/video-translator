@@ -6,7 +6,13 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
+
+# Allow running as a bare script path (`python3 pipeline/preflight.py`): without
+# this, sys.path[0] is the pipeline/ dir, not the repo root, so `from pipeline...`
+# raises ModuleNotFoundError. The box tail scripts invoke it exactly that way.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
 
@@ -260,10 +266,16 @@ def run_strict() -> None:
             __import__(mod)
         except Exception as exc:  # ImportError or a broken transitive
             fail.append(f"import {mod}: {exc}")
+    # demucs 4.0.1 from pip ships WITHOUT demucs.api; the pipeline falls back to
+    # the demucs.separate subprocess (pipeline/dub/separator.py). Accept EITHER so
+    # a perfectly working box is not failed for a non-existent optional submodule.
     try:
         from demucs.api import Separator  # noqa: F401
-    except Exception as exc:
-        fail.append(f"demucs.api.Separator: {exc}")
+    except Exception:
+        try:
+            from demucs.separate import main as _demucs_main  # noqa: F401
+        except Exception as exc:
+            fail.append(f"demucs unusable (neither demucs.api nor demucs.separate): {exc}")
 
     # --- model caches ON DISK (presence, not a lazy re-download) ---
     hf_hub = os.path.expanduser("~/.cache/huggingface/hub")
@@ -272,10 +284,14 @@ def run_strict() -> None:
             fail.append(f"whisper '{tag}' model not on disk ({hf_hub})")
     if not glob.glob(os.path.expanduser("~/.EasyOCR/model/*")):
         fail.append("easyocr packs not on disk (~/.EasyOCR/model)")
-    if not glob.glob(
-        os.path.expanduser("~/.cache/torch/hub/**/*htdemucs*"), recursive=True
+    # get_model('htdemucs') caches HASH-named .th checkpoints under torch hub
+    # (e.g. .../checkpoints/955717e8-8726e21a.th) — never a file literally named
+    # 'htdemucs'. Presence of any demucs .th checkpoint == warmed.
+    if not (
+        glob.glob(os.path.expanduser("~/.cache/torch/hub/checkpoints/*.th"))
+        or glob.glob(os.path.expanduser("~/.cache/torch/hub/**/*htdemucs*"), recursive=True)
     ):
-        fail.append("demucs htdemucs not on disk (~/.cache/torch/hub)")
+        fail.append("demucs htdemucs not on disk (~/.cache/torch/hub/checkpoints/*.th)")
 
     # --- fonts: CJK + Thai coverage for outro text ---
     try:

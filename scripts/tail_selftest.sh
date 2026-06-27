@@ -13,6 +13,7 @@
 set -uo pipefail
 
 ROOT=/workspace/video-translator
+. "$ROOT/scripts/box_python.sh" 2>/dev/null || true   # outro_detect needs venv cv2 (non-login ssh)
 TAIL=/workspace/_tail
 J=/workspace/jobs/selftest
 mkdir -p "$TAIL" "$J/English" "$J/_out_v2"
