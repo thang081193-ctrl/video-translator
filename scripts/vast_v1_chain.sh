@@ -39,13 +39,21 @@ cd "$ROOT" || exit 9
 rc=0
 
 say "V1 brandpass ($JOB  workers=$BP_WORKERS)"
+# --bgm-pool is OPTIONAL: pass it only when the dir has tracks, else brandpass
+# hard-exits ("--bgm-pool not a dir") and fails the whole batch.
+BGM_ARG=()
+if [ -d "$BGM" ] && find "$BGM" -maxdepth 2 -type f \( -name '*.mp3' -o -name '*.m4a' -o -name '*.wav' -o -name '*.aac' -o -name '*.ogg' \) 2>/dev/null | grep -q .; then
+  BGM_ARG=(--bgm-pool "$BGM")
+else
+  say "WARN: no BGM pool at $BGM -> keeping SOURCE audio (Meta copyright risk; deploy a pool for real packs)"
+fi
 python3 -u "$RUN" brandpass --src "$JOB" --dst "$DST" \
-  --watermark "$WM" --outro-video "$OUTRO" --bgm-pool "$BGM" --trim-endcard \
+  --watermark "$WM" --outro-video "$OUTRO" "${BGM_ARG[@]}" --trim-endcard \
   --workers "$BP_WORKERS" || rc=$?
 hb
 
 say "V1 package ($JOB)"
-python3 -u "$RUN" package --src "$JOB" --dst "$DST" --bgm-pool "$BGM" || rc=$?
+python3 -u "$RUN" package --src "$JOB" --dst "$DST" "${BGM_ARG[@]}" || rc=$?
 hb
 
 # ROOT-CAUSE FIX: retrim_endcards.py REMOVED here (was between package and qa in the original).

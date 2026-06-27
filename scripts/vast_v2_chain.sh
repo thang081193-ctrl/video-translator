@@ -51,8 +51,17 @@ python3 -u "$RUN" dub --src "$JOB" --target-langs "$LANGS" --workers "$DUB_WORKE
 hb
 
 say "V2 brandpass ($JOB  workers=$BP_WORKERS)"
+# --bgm-pool is OPTIONAL: brandpass keeps the source audio when no pool is given.
+# Only pass it when the dir actually has tracks, else brandpass hard-exits
+# ("--bgm-pool not a dir") and fails the whole batch for a missing optional asset.
+BGM_ARG=()
+if [ -d "$BGM" ] && find "$BGM" -maxdepth 2 -type f \( -name '*.mp3' -o -name '*.m4a' -o -name '*.wav' -o -name '*.aac' -o -name '*.ogg' \) 2>/dev/null | grep -q .; then
+  BGM_ARG=(--bgm-pool "$BGM")
+else
+  say "WARN: no BGM pool at $BGM -> keeping SOURCE audio (Meta copyright risk; deploy a pool for real packs)"
+fi
 python3 -u "$RUN" brandpass --src "$JOB" --dst "$DST" --target-langs "$LANGS" \
-  --watermark "$WM" --outro-video "$OUTRO" --bgm-pool "$BGM" --trim-endcard \
+  --watermark "$WM" --outro-video "$OUTRO" "${BGM_ARG[@]}" --trim-endcard \
   --workers "$BP_WORKERS" || rc=$?
 hb
 

@@ -61,9 +61,23 @@ def whisper_words(path: str, model_cache: list) -> int:
     if not model_cache:
         from faster_whisper import WhisperModel
         model_cache.append(WhisperModel("tiny", device="cpu", compute_type="int8"))
-    segs, _ = model_cache[0].transcribe(path, beam_size=1, vad_filter=True)
-    text = " ".join(s.text.strip() for s in segs)
+    try:
+        segs, _ = model_cache[0].transcribe(path, beam_size=1, vad_filter=True)
+        text = " ".join(s.text.strip() for s in segs)
+    except ValueError:
+        # faster-whisper 1.0.x: vad_filter=True + language=None empties the
+        # language-detection window on (near-)silent / music-only audio ->
+        # "max() iterable argument is empty". Retry without VAD (0 words is a
+        # legitimate, meaningful result for a music-only creative).
+        segs, _ = model_cache[0].transcribe(path, beam_size=1, vad_filter=False)
+        text = " ".join(s.text.strip() for s in segs)
     return len(re.findall(r"[\w']+", text))
+
+
+def _is_music_only(path: Path) -> bool:
+    """A BGM_* campaign folder (e.g. BGM_UNIVERSAL) is intentionally voiceless —
+    NO-SPEECH there is expected, not a --expect-voice failure."""
+    return any(part.upper().startswith("BGM") for part in path.parts)
 
 
 def main() -> int:
@@ -106,7 +120,7 @@ def main() -> int:
             wcount = str(n)
             if n == 0:
                 notes.append("NO-SPEECH")
-                if args.expect_voice:
+                if args.expect_voice and not _is_music_only(f):
                     fails += 1
         verdict = ",".join(notes) if notes else "PASS"
         print(f"{str(f.name)[:58]:<58} {i:>7.2f} {tp:>6.2f} {wcount:>7}  {verdict}")
