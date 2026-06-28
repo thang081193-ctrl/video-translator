@@ -81,6 +81,8 @@ do_stop(){ # <reason>
     log "  STOP issued (ledger pre-marked stopped); verifying best-effort"
     verify_stopped && log "  STOP CONFIRMED" \
       || log "  (could not confirm before teardown; record already durable)"
+    log "  COST NOTE: GPU billing paused, but a STOPPED instance STILL bills DISK STORAGE."
+    log "             After visual QA + local pull, DESTROY to end ALL cost: scripts/human_destroy.sh $CID DESTROY"
   else
     # the stop CALL failed -> we are probably still up. Verify; if truly still running,
     # ROLL BACK the optimistic 'stopped' so a relaunch RETRIES instead of no-op'ing.

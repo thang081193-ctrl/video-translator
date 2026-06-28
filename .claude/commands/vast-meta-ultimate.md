@@ -152,7 +152,7 @@ card. Audio/count QA cannot see a missing outro — this human look is the autho
 ## Phase 5 — STOP only (NEVER auto-destroy)
 
 This skill and ANY box-side script may ONLY `vastai stop` (reversible — keeps the disk and
-the rendered tree; just pauses billing). **`vastai destroy` is FORBIDDEN to every
+the rendered tree; pauses **GPU** billing). **`vastai destroy` is FORBIDDEN to every
 script/agent in this flow.** The 2026-06-26 post-mortem proved a green *audio* QA gate is
 **blind to a missing brand outro** — exactly the defect that shipped — so destroy must not key
 off it. Destroy is a **HUMAN** action, performed only after a human eyeballs the end-frame
@@ -168,6 +168,14 @@ vastai show instance <INSTANCE_ID> --raw    # confirm actual_status in stopped/e
 
 If the deliverables did NOT verify, do **not** stop yet — re-pull / re-run the failed phase
 first (a stopped box can be `vastai start instance <INSTANCE_ID>` to resume).
+
+> ⚠️ **STOPPED ≠ FREE — you MUST eventually DESTROY to stop ALL cost.** `vastai stop`
+> only halts the GPU/compute charge; Vast **keeps billing the instance's DISK STORAGE**
+> for as long as it stays stopped (and the rented GPU slot is held). "Stop-and-park" is a
+> *safety pause so you don't auto-destroy before visual QA* — it is NOT the end state.
+> Leaving a box merely *stopped* for days quietly burns money and can lock the slot. Once
+> QA passes + the local pull is verified, **DESTROY it** (next section) — that is the only
+> action that ends every charge. Don't leave parked boxes lying around.
 
 ### Destroy is a separate, human-typed gate (after visual QA)
 

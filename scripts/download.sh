@@ -163,4 +163,9 @@ echo DOWNLOAD_COMPLETE
 echo
 echo "NEXT (human gate): open '$DEST/_qa_montage/'montage_*.jpg + outro_report.json."
 echo "Confirm the brand outro on EVERY pack + zero unexplained 'suspect_no_outro'."
-echo "ONLY THEN run:  bash scripts/human_destroy.sh <INSTANCE_ID> DESTROY"
+echo "ONLY THEN run:  bash scripts/human_destroy.sh ${INST:-<INSTANCE_ID>} DESTROY"
+echo
+echo "!!! COST WARNING: the box self-PARKS (vastai stop) — but a STOPPED instance is"
+echo "    NOT free: Vast keeps billing for its DISK STORAGE while stopped. To stop ALL"
+echo "    cost you MUST DESTROY it (above) once QA passes + this download is verified."
+echo "    Leaving it merely 'stopped' overnight quietly burns money. Stopped != done."
