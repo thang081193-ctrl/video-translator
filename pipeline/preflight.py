@@ -6,7 +6,13 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
+
+# Allow running as a bare script path (`python3 pipeline/preflight.py`): without
+# this, sys.path[0] is the pipeline/ dir, not the repo root, so `from pipeline...`
+# raises ModuleNotFoundError. The box tail scripts invoke it exactly that way.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
 
@@ -215,6 +221,132 @@ def run_preflight(
     return status
 
 
+def run_strict() -> None:
+    """STRICT box-side preflight (per AUDIT_final.md Part 2c).
+
+    Fail fast (in ~seconds) with the EXACT missing item BEFORE any render starts,
+    instead of stalling 10 min into a batch on a lazy model download or a missing
+    binary. Asserts the full Vast.ai render environment:
+
+      * ffmpeg / ffprobe on PATH
+      * importable: torch, torchaudio, faster_whisper, easyocr, cv2, soundfile,
+        edge_tts, PIL  +  demucs.api.Separator
+      * whisper tiny/small/medium caches + easyocr packs + demucs htdemucs ON DISK
+      * fc-list has CJK / Thai fonts
+      * ffmpeg has the libx264 encoder (NVENC is blocked on consumer Vast)
+      * torch.cuda available (catches the cu121-on-cu130 silent CPU-fall)
+      * /etc/vast.env present IF REQUIRE_SELFSTOP is set (self-STOP would silently disable)
+      * >= 50 GB free on the work volume
+
+    Prints "PREFLIGHT FAIL" with each missing item and sys.exit(1); else
+    "PREFLIGHT OK" and sys.exit(0). This is the intended FIRST line of full_batch.sh.
+    """
+    import glob
+    import sys
+
+    fail: list[str] = []
+
+    # --- required binaries ---
+    for binary in ("ffmpeg", "ffprobe"):
+        if not shutil.which(binary):
+            fail.append(f"missing binary: {binary}")
+
+    # --- importable modules (report the exact module that failed) ---
+    for mod in (
+        "torch",
+        "torchaudio",
+        "faster_whisper",
+        "easyocr",
+        "cv2",
+        "soundfile",
+        "edge_tts",
+        "PIL",
+    ):
+        try:
+            __import__(mod)
+        except Exception as exc:  # ImportError or a broken transitive
+            fail.append(f"import {mod}: {exc}")
+    # demucs 4.0.1 from pip ships WITHOUT demucs.api; the pipeline falls back to
+    # the demucs.separate subprocess (pipeline/dub/separator.py). Accept EITHER so
+    # a perfectly working box is not failed for a non-existent optional submodule.
+    try:
+        from demucs.api import Separator  # noqa: F401
+    except Exception:
+        try:
+            from demucs.separate import main as _demucs_main  # noqa: F401
+        except Exception as exc:
+            fail.append(f"demucs unusable (neither demucs.api nor demucs.separate): {exc}")
+
+    # --- model caches ON DISK (presence, not a lazy re-download) ---
+    hf_hub = os.path.expanduser("~/.cache/huggingface/hub")
+    for tag in ("tiny", "small", "medium"):
+        if not glob.glob(os.path.join(hf_hub, f"*whisper*{tag}*")):
+            fail.append(f"whisper '{tag}' model not on disk ({hf_hub})")
+    if not glob.glob(os.path.expanduser("~/.EasyOCR/model/*")):
+        fail.append("easyocr packs not on disk (~/.EasyOCR/model)")
+    # get_model('htdemucs') caches HASH-named .th checkpoints under torch hub
+    # (e.g. .../checkpoints/955717e8-8726e21a.th) — never a file literally named
+    # 'htdemucs'. Presence of any demucs .th checkpoint == warmed.
+    if not (
+        glob.glob(os.path.expanduser("~/.cache/torch/hub/checkpoints/*.th"))
+        or glob.glob(os.path.expanduser("~/.cache/torch/hub/**/*htdemucs*"), recursive=True)
+    ):
+        fail.append("demucs htdemucs not on disk (~/.cache/torch/hub/checkpoints/*.th)")
+
+    # --- fonts: CJK + Thai coverage for outro text ---
+    try:
+        fc = subprocess.run(
+            ["fc-list"], capture_output=True, text=True, timeout=30, check=False
+        ).stdout
+        if not any(key in fc for key in ("CJK", "Thai")):
+            fail.append("CJK/Thai fonts missing (apt fonts-noto-cjk + fonts-noto-extra)")
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        fail.append(f"fc-list unavailable: {exc}")
+
+    # --- ffmpeg has libx264 (NVENC is blocked on consumer Vast GPUs) ---
+    if shutil.which("ffmpeg"):
+        try:
+            enc = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            ).stdout
+            if "libx264" not in enc:
+                fail.append("ffmpeg libx264 encoder missing")
+        except subprocess.SubprocessError as exc:
+            fail.append(f"ffmpeg -encoders probe failed: {exc}")
+
+    # --- GPU: torch.cuda available (catches cu121-on-cu130 silent CPU-fall) ---
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            fail.append("torch.cuda not available (cu121-on-cu130 silent-CPU bug?)")
+    except Exception as exc:
+        fail.append(f"cuda probe: {exc}")
+
+    # --- self-STOP creds, only if explicitly required ---
+    if env_flag("REQUIRE_SELFSTOP", False) and not os.path.exists("/etc/vast.env"):
+        fail.append("/etc/vast.env missing (self-STOP would silently disable)")
+
+    # --- disk: need >= 50 GB free on the work volume ---
+    work_path = "/workspace" if os.path.isdir("/workspace") else os.getcwd()
+    try:
+        free = shutil.disk_usage(work_path).free
+        if free < 50 * (1024**3):
+            fail.append(f"<50GB free on {work_path} ({free // (1024**3)}GB)")
+    except OSError as exc:
+        fail.append(f"disk check on {work_path} failed: {exc}")
+
+    if fail:
+        print("PREFLIGHT FAIL:\n  " + "\n  ".join(fail))
+        sys.exit(1)
+    print("PREFLIGHT OK")
+    sys.exit(0)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Preflight checks for GPU and API keys.")
 
@@ -222,6 +354,16 @@ def _parse_args() -> argparse.Namespace:
         require_translation_keys=None,
         require_grok=None,
         require_cuda=None,
+    )
+
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Run the STRICT box-side render preflight (binaries, imports, model "
+            "caches on disk, fonts, libx264, CUDA, disk). Exits 1 on the first "
+            "missing item. Intended as the first line of full_batch.sh."
+        ),
     )
 
     translation_group = parser.add_mutually_exclusive_group()
@@ -272,6 +414,12 @@ def _parse_args() -> argparse.Namespace:
 def main():
     load_dotenv()
     args = _parse_args()
+
+    # STRICT mode short-circuits the standard key/CUDA-flag preflight: it runs the
+    # full box-side render-environment assertion and exits 0/1 itself.
+    if args.strict:
+        run_strict()
+        return
 
     require_translation_keys = (
         args.require_translation_keys

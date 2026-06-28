@@ -169,15 +169,52 @@ def cleanup_old_jobs(upload_dir: str):
 
 
 def auto_stop_check():
-    """Check if Vast.ai instance should be stopped due to idle timeout."""
-    cid = os.environ.get("CONTAINER_ID")
+    """Stop the Vast.ai instance on idle — BATCH-AWARE + VERIFIED (never auto-destroy).
+
+    The bash render batch (full_batch.sh) does NOT touch `last_activity`, so a naive
+    idle-stop would kill a live render. Guards: refuse to stop while the batch heartbeat
+    is fresh, or while a batch is in flight (master_queue.pid present, no BATCH.DONE yet).
+    The stop is rc-checked + verify-polled (not fire-and-forget). CONTAINER_ID is
+    normalized (Vast injects a "C." label prefix). DESTROY is never issued here.
+    """
+    cid = os.environ.get("CONTAINER_ID", "")
+    cid = cid[2:] if cid.startswith("C.") else cid          # strip "C." label prefix
     api_key = os.environ.get("CONTAINER_API_KEY")
-    if cid and api_key and (time.time() - last_activity) > cfg.web.idle_timeout:
-        log.info(f"Idle for >{cfg.web.idle_timeout // 60}min, stopping instance {cid}")
-        try:
-            subprocess.run(
-                ["vastai", "stop", "instance", cid, "--api-key", api_key],
-                capture_output=True, timeout=30,
-            )
-        except Exception as e:
-            log.error(f"Auto-stop failed: {e}")
+    if not (cid and api_key):
+        return
+    if (time.time() - last_activity) <= cfg.web.idle_timeout:
+        return
+    # BATCH GUARD 1: a fresh tail heartbeat means a render is actively progressing.
+    try:
+        hb = "/workspace/_tail/heartbeat"
+        if os.path.exists(hb) and (time.time() - os.path.getmtime(hb)) < cfg.web.idle_timeout:
+            log.info("auto_stop: batch heartbeat fresh -> refuse to stop (live render)")
+            return
+    except OSError:
+        pass
+    # BATCH GUARD 2: batch launched (pid file) but not yet finished (no marker) -> mid-run.
+    if os.path.exists("/workspace/_tail/master_queue.pid") and not os.path.exists("/workspace/_tail/BATCH.DONE"):
+        log.info("auto_stop: batch in flight (pid file, no BATCH.DONE) -> refuse to stop")
+        return
+    log.info(f"Idle >{cfg.web.idle_timeout // 60}min and no live batch -> stopping instance {cid}")
+    try:
+        r = subprocess.run(["vastai", "stop", "instance", cid, "--api-key", api_key],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            log.error(f"Auto-stop returned {r.returncode}: {(r.stderr or '').strip()}")
+            return
+        # VERIFY it actually stopped — do not trust returncode 0 alone.
+        _json = __import__("json")
+        for _ in range(3):
+            time.sleep(20)
+            s = subprocess.run(["vastai", "show", "instance", cid, "--raw", "--api-key", api_key],
+                               capture_output=True, text=True, timeout=30)
+            try:
+                st = (_json.loads(s.stdout) or {}).get("actual_status", "")
+            except Exception:
+                st = ""
+            if st in ("stopped", "exited", "offline"):
+                log.info("Auto-stop confirmed stopped"); return
+        log.error("Auto-stop issued but NOT confirmed stopped — operator must verify")
+    except Exception as e:
+        log.error(f"Auto-stop failed: {e}")

@@ -154,9 +154,18 @@ def transcribe_one(model, video: Path) -> dict:
         if not extract_wav(video, wav):
             return {"whisper_lang": None, "has_voice": False,
                     "transcript": "", "segments": [], "duration": dur}
-        seg_gen, info = model.transcribe(
-            str(wav), beam_size=1, best_of=1, vad_filter=True, language=None,
-        )
+        try:
+            seg_gen, info = model.transcribe(
+                str(wav), beam_size=1, best_of=1, vad_filter=True, language=None,
+            )
+        except ValueError:
+            # faster-whisper 1.0.x: vad_filter=True combined with language=None can
+            # empty the window used for language auto-detection -> ValueError
+            # "max() iterable argument is empty". Retry WITHOUT vad (the speech gate
+            # below still drops non-speech segments, so gating is preserved).
+            seg_gen, info = model.transcribe(
+                str(wav), beam_size=1, best_of=1, vad_filter=False, language=None,
+            )
         raw = list(seg_gen)
         # Speech gate — identical logic to brand_pass._transcribe_video.
         kept = [s for s in raw if (s.text or "").strip() and s.avg_logprob > LOGPROB_GATE]

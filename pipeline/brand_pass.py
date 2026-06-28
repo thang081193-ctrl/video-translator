@@ -327,6 +327,35 @@ def _ffprobe_dims(path: str) -> tuple[int, int]:
     return int(w), int(h)
 
 
+def _ffprobe_fps(path: str, default: str = "30") -> str:
+    """Return the video stream's frame rate as an ffmpeg-ready rational string
+    (e.g. "24/1", "30000/1001"). Falls back to `default` on any failure.
+
+    Returning the raw `r_frame_rate` rational (not a rounded float) keeps the
+    value exact for fractional rates like 29.97 (30000/1001). It is used to keep
+    the outro card AND the final concat on the SAME constant frame rate as the
+    body: a 30fps-normalized outro concatenated onto a 24fps body otherwise
+    plays in slow-motion / lingers and inflates the output duration.
+    """
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, check=True,
+        )
+        val = r.stdout.strip()
+        if "/" in val:
+            num, den = val.split("/", 1)
+            if float(num) > 0 and float(den) > 0:
+                return val
+        elif val and float(val) > 0:
+            return val
+    except Exception as _e:
+        log.warning(f"ffprobe fps failed for {os.path.basename(path)} ({_e}); using {default}")
+    return default
+
+
 def _is_target_aspect(w: int, h: int, target_w: int = W, target_h: int = H, tol: float = 0.05) -> bool:
     """True if source aspect is within tol of target (default ±5% of 9:16)."""
     return abs((w / h) - (target_w / target_h)) <= tol
@@ -1348,14 +1377,19 @@ def brand_pass_video(
                     capture_output=True, check=True, text=True,
                 )
 
-        # 7. Outro card — user-supplied mp4 OR Pillow-generated 2026 designed card
+        # 7. Outro card — user-supplied mp4 OR Pillow-generated 2026 designed card.
+        # Normalize the outro to the BODY's frame rate (NOT a hardcoded 30) so the
+        # two segments share one timeline; the final concat below then re-stamps a
+        # single CFR target. Hardcoding 30 made a 3s outro linger ~7-9s on 24fps
+        # sources (slow-motion playback inflated the output duration).
+        target_fps = _ffprobe_fps(body)
         outro = os.path.join(work, "outro.mp4")
         if outro_video:
-            log.info(f"Normalizing supplied outro video → {W}x{H}@30fps, no audio ...")
+            log.info(f"Normalizing supplied outro video → {W}x{H}@{target_fps}fps, no audio ...")
             subprocess.run(
                 ["ffmpeg", "-y", "-i", outro_video,
                  "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-                        f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30",
+                        f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={target_fps}",
                  "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
                  "-pix_fmt", "yuv420p", "-an", outro],
                 capture_output=True, check=True, text=True,
@@ -1371,7 +1405,7 @@ def brand_pass_video(
             frame.save(outro_frame_png)
             subprocess.run(
                 ["ffmpeg", "-y",
-                 "-loop", "1", "-framerate", "30", "-i", outro_frame_png,
+                 "-loop", "1", "-framerate", target_fps, "-i", outro_frame_png,
                  "-t", str(p["outro_dur"]),
                  "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
                  "-pix_fmt", "yuv420p", outro],
@@ -1383,12 +1417,17 @@ def brand_pass_video(
         with open(concat_list, "w", encoding="utf-8") as f:
             f.write(f"file '{body}'\nfile '{outro}'\n")
 
-        log.info("Concat + mux mixed audio → final ...")
+        log.info(f"Concat + mux mixed audio → final (CFR @ {target_fps}fps) ...")
         subprocess.run(
             ["ffmpeg", "-y",
              "-f", "concat", "-safe", "0", "-i", concat_list,
              "-i", mixed_audio,
              "-map", "0:v", "-map", "1:a",
+             # Force a single CFR timeline so body (source fps) + outro share one
+             # frame rate; without this a mixed-fps concat replays the outro in
+             # slow-motion and inflates the duration. -r sets the rate, -fps_mode
+             # cfr guarantees constant frame timing (avg_frame_rate == r_frame_rate).
+             "-r", target_fps, "-fps_mode", "cfr",
              "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
              "-c:a", "copy",
              "-map_metadata", "-1",

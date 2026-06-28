@@ -1,11 +1,14 @@
 ---
-description: "Local-extended twin of meta-ads-prepare-ultimate: runs the SAME full pipeline but offloads every GPU-heavy phase (scan/Whisper, dub/Demucs+TTS, voiceover, brandpass/render) to a rented Vast.ai GPU, keeps the translate step $0 in THIS chat (Claude, never Gemini), and AUTO-DESTROYS the Vast instance when the batch is verified done. Use when the local PC can't run the GPU work or you don't want it lagging the machine."
+description: "Local-extended twin of meta-ads-prepare-ultimate: runs the SAME full pipeline but offloads every GPU-heavy phase (scan/Whisper, dub/Demucs+TTS, voiceover, brandpass/render) to a rented Vast.ai GPU, keeps the translate step $0 in THIS chat (Claude, never Gemini), and STOPS (reversible, never auto-destroy) the Vast instance when the batch is verified done — destroy is a human-typed token after visual QA. Use when the local PC can't run the GPU work or you don't want it lagging the machine."
 ---
 
 `vast-meta-ultimate` is **`meta-ads-prepare-ultimate` extended to Vast.ai** — same skill,
 same `run.py`, same manifest. The ONLY difference vs the local skill: the GPU-heavy phases
-run on a rented Vast GPU instead of this PC, and the instance is **auto-destroyed** at the
-end. The LLM-reasoning + translate steps stay in **THIS chat** (Claude, $0 — NEVER route
+run on a rented Vast GPU instead of this PC, and the instance is **STOPPED** (reversible) at
+the end — **never auto-destroyed**. Destroy is a deliberate, human-typed token issued via
+`scripts/human_destroy.sh` AFTER visual outro/branding QA (audio QA is blind to a missing
+brand outro — see the 2026-06-26 post-mortem). The LLM-reasoning + translate steps stay in
+**THIS chat** (Claude, $0 — NEVER route
 translation to Gemini). The local PC stays free (no Whisper/Demucs/render load lagging it).
 
 Read `_claude_skills/meta-ads-prepare-ultimate/SKILL.md` for the pipeline itself (the 6 steps,
@@ -16,16 +19,36 @@ machines with `scripts/vastai-sync.sh`. Convention: the job lives at `/workspace
 on Vast, `<local-batch-dir>` locally; the whole job folder (incl. `_ultimate/manifest.json`)
 is what you sync.
 
-## Which phase runs where
+## Divide & conquer — when the human is needed (and when NOT)
 
-| phase (meta-ultimate subcommand) | runs on | why |
+The whole point: **the operator is needed at EXACTLY TWO brief moments; everything else is
+autonomous and the box self-PARKs — never sit at the PC waiting for a render to finish.**
+
+| phase | who | at the PC? |
 |---|---|---|
-| `scan` (Whisper) | **Vast (GPU)** | transcription is the heaviest step |
-| Step 2 manifest-fill — vertical / language / copy / **translation** | **this chat (Claude)** | edits `manifest.json`; $0, never Gemini |
-| `bgm-suggest`, `organize` | either (local fine) | pure reasoning / file moves |
-| `dub`, `voiceover` (Demucs + Edge-TTS) | **Vast (GPU)** | source separation + TTS render |
-| `brandpass` (resize 9:16 + render + BGM swap) | **Vast (GPU)** | the encode is GPU-bound |
-| `package`, `retrim_endcards`, `qa_voice_mix` | **local** | CSV / QA + cv2 card-detect, light |
+| **0. upload + `scan_prep.sh`** (Whisper transcribe, all packs) | autonomous on Vast | no — launch + walk away |
+| **1. fill the manifest** (translations + copy + vertical/angle/`vo_gender` + lyric/off-vertical/betting decisions) | **Opus, in this chat — the ONLY $0 / judgment step** | **yes — ONE short session** |
+| **2. `full_batch.sh`** (dub → voiceover → **brandpass = outro + logo watermark + fingerprint change + BGM swap** → package → QA → self-STOP) | autonomous on Vast | no — walk away / sleep |
+| **3. `download.sh` + visual QA + `human_destroy.sh`** | operator | **yes — ~5 min, any time later** |
+
+**Opus is needed at EXACTLY ONE point** (phase 1, fill the manifest). brandpass — outro,
+watermark, fingerprint, resize, BGM — and dub/voiceover/package/QA are **pure compute Vast
+runs alone**. To make phase 1 instant ("turn on the PC and it just works"), phase 0 runs scan
+UP FRONT so the transcripts are already waiting: `\$TAIL/SCAN.DONE` is the signal. After phase 1
+launches `full_batch.sh`, `park_timer.sh` self-STOPs the box when done (reversible `vastai stop`,
+never destroy) so GPU billing ends with zero babysitting; the operator returns whenever.
+
+### Which subcommand runs where
+
+| phase (subcommand) | runs on | why |
+|---|---|---|
+| `scan` (Whisper) | **Vast** (phase 0, autonomous) | front-loaded so phase 1 needs no wait |
+| manifest-fill — vertical / language / copy / `vo_gender` / **translation** | **this chat (Claude)** | edits `manifest.json`; $0, never Gemini; the ONE human/AI gate |
+| `bgm-suggest`, `organize` | Vast (in `full_batch.sh`) | pure reasoning / file moves |
+| `dub`, `voiceover` (Demucs + Edge-TTS) | **Vast** | source separation + TTS render |
+| `brandpass` (resize 9:16 + outro + watermark + fingerprint + BGM) | **Vast** | the encode is GPU-bound — and **no `retrim_endcards` after the outro** (it strips the brand outro — 2026-06-26 bug) |
+| `package`, `qa_voice_mix` | **Vast** (in `full_batch.sh`) | run where the files are, before self-STOP |
+| pull + **visual outro QA** + destroy | **local** | the hard human gate; destroy is a hand-typed token |
 
 ## Prereqs + capture instance identity upfront
 
@@ -54,15 +77,19 @@ bash scripts/vastai-sync.sh up <HOST> <PORT> "<local-batch-dir>" /workspace/jobs
 If the sources come from URLs (Meta Ad Library scrapes etc.), download them directly on Vast —
 datacenter bandwidth beats a home upload by a lot.
 
-## Phase 1 — scan on Vast (GPU: Whisper, once)
+## Phase 1 — front-load scan on Vast (autonomous; transcripts ready for the Opus session)
+
+Launch the scan of every uploaded pack and **walk away** — it runs `preflight --strict` first
+(so it never stops mid-way to install/download), transcribes, and writes `\$TAIL/SCAN.DONE`:
 
 ```bash
-ssh -p <PORT> root@<HOST> 'cd /workspace/video-translator && PYTHONIOENCODING=utf-8 \
-  python3 -u _claude_skills/meta-ads-prepare-ultimate/run.py scan \
-  --src /workspace/jobs/<batch> --whisper small'
+ssh -p <PORT> root@<HOST> 'cd /workspace/video-translator && \
+  nohup bash scripts/scan_prep.sh > /workspace/_tail/scan_prep.log 2>&1 &'
 ```
-First run downloads Whisper + Demucs weights (several GB) — slow once, cached after. Writes
-`/workspace/jobs/<batch>/_ultimate/manifest.json`. `--whisper medium` for noisy/tonal sources.
+When `SCAN.DONE` exists (`ssh ... 'cat /workspace/_tail/SCAN.DONE'`), the manifests are ready —
+turning on the PC + opening this chat lets Opus fill them immediately. With a fresh box, the
+one-shot env (Docker image or `deploy/setup.sh`) has already prefetched Whisper/Demucs/EasyOCR
+so there is **no multi-GB first-run download**.
 
 ## Phase 2 — fill the manifest IN THIS CHAT (the $0 step)
 
@@ -84,55 +111,90 @@ bash scripts/vastai-sync.sh up <HOST> <PORT> \
 (`organize` + `bgm-suggest` can run locally or on Vast — they're light. Run `organize` where
 the files are about to be processed; for this flow, on Vast just before dub/brandpass.)
 
-## Phase 3 — dub / voiceover / brandpass on Vast (GPU)
+## Phase 3 — autonomous render + self-PARK (zero babysitting)
 
-Same `run.py` subcommands as the local skill, just over SSH. Example brandpass:
-
-```bash
-ssh -p <PORT> root@<HOST> 'cd /workspace/video-translator && PYTHONIOENCODING=utf-8 \
-  python3 -u _claude_skills/meta-ads-prepare-ultimate/run.py brandpass \
-  --src /workspace/jobs/<batch> --dst /workspace/jobs/<batch>/_out \
-  --vertical <v> --target-langs <...> --watermark <...> [--bgm-pool <...>] --workers 4'
-```
-Run `dub` / `voiceover` the same way when the batch needs them. Edge-TTS needs outbound
-internet — Vast instances have it. The voice-audibility gate (`VOICEMIX` log) is built in.
-
-## Phase 4 — pull deliverables + finish locally (MUST pass before destroy)
-
-Tar the campaign tree on Vast first (one stream beats thousands of scp round-trips):
+Once the manifest is filled, launch the hardened batch and **go to sleep**. `full_batch.sh`
+gates each pack on `run.py status --strict` (refuses to start if the manifest is under-filled —
+a silently-skipped lang would otherwise be a short pack), runs dub → voiceover → brandpass
+(outro + watermark + fingerprint + BGM) → package → QA, writes an atomic count-gated
+`BATCH.DONE`, builds the end-frame QA montage, and `park_timer.sh` does the **only** autonomous
+lifecycle act — a verified `vastai stop` (reversible; **never destroy**) — so GPU billing ends:
 
 ```bash
-ssh -p <PORT> root@<HOST> 'cd /workspace/jobs/<batch> && tar -cf _out.tar _out'
-bash scripts/vastai-sync.sh down <HOST> <PORT> /workspace/jobs/<batch>/_out.tar "<local-batch-dir>/_out.tar"
-tar -xf "<local-batch-dir>/_out.tar" -C "<local-batch-dir>"
+ssh -p <PORT> root@<HOST> '
+  cd /workspace/video-translator &&
+  nohup bash scripts/full_batch.sh > /workspace/_tail/full_batch.log 2>&1 &
+  nohup bash scripts/tail_qa.sh    > /workspace/_tail/tail_qa.log    2>&1 &
+  echo launched'
 ```
-Then finish locally (these are light, no GPU):
+Edge-TTS needs outbound internet (Vast has it); the voice-audibility gate (`VOICEMIX`) is
+built in. The box self-STOPs minutes after the work + QA-montage finish; the operator is not
+needed until the pull.
+
+## Phase 4 — pull (checked invariant) + visual QA (the human gate, any time later)
+
+One command pulls deliverables **and the manifest-driven source set** (so a re-run never
+needs re-translation) **and** the end-frame QA montage, PIPESTATUS-checked, with per-pack count
+asserts. It refuses to print `DOWNLOAD_COMPLETE` unless everything is on local disk, then
+signals the box to stand its park timer down:
 
 ```bash
-python _claude_skills/meta-ads-prepare-ultimate/run.py package --src "<local-batch-dir>" --dst "<local-batch-dir>/_out" --vertical <v> --target-langs <...>
-python _claude_skills/meta-ads-prepare-ultimate/retrim_endcards.py all "<local-batch-dir>/_out"
-python _claude_skills/meta-ads-prepare/qa_voice_mix.py "<local-batch-dir>/_out" --whisper --expect-voice
+bash scripts/download.sh <HOST> <PORT> <INSTANCE_ID>
 ```
+`package` + `qa_voice_mix` already ran on Vast inside `full_batch.sh`. **Do NOT run
+`retrim_endcards` here** (or anywhere after the outro append — it strips the brand outro, the
+2026-06-26 defect; brandpass `--trim-endcard` already removed the competitor card).
 
-## Phase 5 — AUTO-DESTROY the Vast instance
+Then the **mandatory visual gate**: open `_deliverables_<batch>/_qa_montage/montage_*.jpg` +
+`outro_report.json` and eyeball that EVERY pack ends on the brand outro with no competitor
+card. Audio/count QA cannot see a missing outro — this human look is the authority.
 
-**Hard gate — destroy is IRREVERSIBLE (kills the instance + its disk).** Only proceed once
-ALL of these hold, else you lose the GPU work:
-1. The deliverables tar downloaded + untarred locally (the `_out/` tree exists locally).
-2. `package` QA gate passed (`qa_report.csv` → 0 FAIL) and the local file count matches the
-   expected output count.
-3. Nothing else still running on the instance you need.
+## Phase 5 — STOP only (NEVER auto-destroy)
 
-When the gate passes, destroy automatically:
+This skill and ANY box-side script may ONLY `vastai stop` (reversible — keeps the disk and
+the rendered tree; pauses **GPU** billing). **`vastai destroy` is FORBIDDEN to every
+script/agent in this flow.** The 2026-06-26 post-mortem proved a green *audio* QA gate is
+**blind to a missing brand outro** — exactly the defect that shipped — so destroy must not key
+off it. Destroy is a **HUMAN** action, performed only after a human eyeballs the end-frame
+montage.
+
+When the deliverables verify (deliverables + source set pulled locally, `package` QA → 0 FAIL,
+local count matches expected), STOP the instance — do NOT destroy:
 
 ```bash
-vastai destroy instance <INSTANCE_ID>
-vastai show instances          # confirm it's gone (no longer listed)
+vastai stop instance <INSTANCE_ID>          # reversible; disk + renders survive
+vastai show instance <INSTANCE_ID> --raw    # confirm actual_status in stopped/exited/offline
 ```
-This stops billing immediately. (Use `vastai stop instance <INSTANCE_ID>` only if the user
-explicitly wants to KEEP the disk for a follow-up run — the default for this skill is
-**destroy**, per its contract.) If the deliverables did NOT verify, do **not** destroy — keep
-the instance and re-pull / re-run the failed phase first.
+
+If the deliverables did NOT verify, do **not** stop yet — re-pull / re-run the failed phase
+first (a stopped box can be `vastai start instance <INSTANCE_ID>` to resume).
+
+> ⚠️ **STOPPED ≠ FREE — you MUST eventually DESTROY to stop ALL cost.** `vastai stop`
+> only halts the GPU/compute charge; Vast **keeps billing the instance's DISK STORAGE**
+> for as long as it stays stopped (and the rented GPU slot is held). "Stop-and-park" is a
+> *safety pause so you don't auto-destroy before visual QA* — it is NOT the end state.
+> Leaving a box merely *stopped* for days quietly burns money and can lock the slot. Once
+> QA passes + the local pull is verified, **DESTROY it** (next section) — that is the only
+> action that ends every charge. Don't leave parked boxes lying around.
+
+### Destroy is a separate, human-typed gate (after visual QA)
+
+Destroy is IRREVERSIBLE (kills the instance + its disk). It happens ONLY after a human:
+1. Confirmed the local pull is complete (deliverables + manifest-driven source set + montage
+   all on local disk).
+2. **OPENED the end-frame montage + `outro_report.json` and visually confirmed the brand
+   outro on EVERY pack** with zero unexplained `suspect_no_outro`.
+
+Then the operator hand-types the instance id AND the literal word `DESTROY`:
+
+```bash
+bash scripts/human_destroy.sh <INSTANCE_ID> DESTROY
+```
+
+No script/agent may synthesize that `DESTROY` token or call `vastai destroy` on its own — the
+only file in this repo permitted to contain the string `vastai destroy` is
+`scripts/human_destroy.sh`. Any orchestrator/tail must assert its argv/state never contains
+the string `destroy`.
 
 ## Pure dub-only batch (lean shortcut)
 

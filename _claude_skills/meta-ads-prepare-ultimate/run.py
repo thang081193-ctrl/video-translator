@@ -156,8 +156,25 @@ def cmd_status(args):
     need_meta = [v["orig_name"] for v in vids if v.get("vertical") != "skip" and not v.get("language_folder")]
     need_angle = [v["orig_name"] for v in vids if v.get("vertical") != "skip" and not v.get("angle")]
     need_copy = [v["orig_name"] for v in vids if v.get("vertical") != "skip" and not v.get("copy")]
-    need_tr = [v["orig_name"] for v in voice
-               if not v.get("segments") or any(not s.get("translations") for s in v.get("segments", []))]
+    if getattr(args, "target_langs", None):
+        # Lang-aware gate: mirror cmd_dub's exact skip condition so a manifest that is
+        # missing even ONE target lang for ONE segment is flagged (a silently-skipped lang
+        # otherwise yields a short pack with no error). Excludes vertical=="skip" like dub.
+        _t = _parse_langs(args.target_langs)
+        need_tr = []
+        for v in voice:
+            if v.get("vertical") == "skip":
+                continue
+            segs = v.get("segments", [])
+            _sl = _src_iso(v)
+            for _tl in _t:
+                if _tl == _sl:
+                    continue
+                if not segs or any(not (s.get("translations", {}).get(_tl) or "").strip() for s in segs):
+                    need_tr.append(v["orig_name"]); break
+    else:
+        need_tr = [v["orig_name"] for v in voice
+                   if not v.get("segments") or any(not s.get("translations") for s in v.get("segments", []))]
     organized = [v for v in vids if v.get("renamed")]
     dubbed = [v for v in vids if v.get("dubbed_outputs")]
     done = [v for v in vids if v.get("outputs")]
@@ -175,6 +192,24 @@ def cmd_status(args):
                        ("MISSING-COPY", need_copy), ("MISSING-TRANSLATION", need_tr)):
         if lst:
             print(f"  {label}: {', '.join(lst[:12])}{' ...' if len(lst) > 12 else ''}", flush=True)
+
+    # --strict: hard manifest-complete gate for the unattended Vast batch. The default
+    # (no flag) keeps the historical behavior of always exiting 0 — only --strict turns a
+    # MISSING-* into a non-zero exit so full_batch.sh can refuse to start the dub phase on an
+    # under-filled manifest (a silently-skipped lang = a short pack, no error otherwise).
+    if getattr(args, "strict", False):
+        blockers = {
+            "MISSING-VERTICAL": need_vert,
+            "MISSING-META": need_meta,
+            "MISSING-COPY": need_copy,
+            "MISSING-TRANSLATION": need_tr,
+        }
+        offending = {k: len(v) for k, v in blockers.items() if v}
+        if offending:
+            summary = ", ".join(f"{k}={n}" for k, n in offending.items())
+            print(f"STRICT FAIL: manifest incomplete ({summary})", flush=True)
+            sys.exit(1)
+        print("STRICT OK: manifest complete (no MISSING-* blockers)", flush=True)
 
 
 # ----------------------------------------------------------------------------
@@ -876,6 +911,13 @@ def main():
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("status"); p.add_argument("--src", required=True)
+    p.add_argument("--target-langs",
+                   help="when given, the MISSING-TRANSLATION gate becomes lang-aware: a voice "
+                        "video is incomplete unless every target lang (!= its source) has a "
+                        "non-empty translation in EVERY segment (mirrors `dub`'s skip rule)")
+    p.add_argument("--strict", action="store_true",
+                   help="exit non-zero if any voice video is missing required "
+                        "vertical/meta/copy/translations (default: always exit 0)")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("organize"); p.add_argument("--src", required=True)
