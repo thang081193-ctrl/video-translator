@@ -25,6 +25,11 @@ if [ "$TOKEN" != "DESTROY" ]; then
   exit 1
 fi
 
+# pick a python that actually runs: Windows Git Bash ships a non-functional `python3`
+# Store stub, so the report-parse below must not hard-depend on the `python3` name.
+PY=""; for c in python python3; do if "$c" -c '' >/dev/null 2>&1; then PY="$c"; break; fi; done
+[ -n "$PY" ] || { echo "refusing: no working python found (tried python, python3)"; exit 1; }
+
 DEST="${DEST:-/d/Dev/Tools/Video Translator/_deliverables_2606}"
 REPORT="$DEST/_qa_montage/outro_report.json"
 
@@ -46,7 +51,7 @@ fi
 echo "DOWNLOAD proof OK: $n_mp4 mp4 on local disk under $DEST"
 
 # --- clean-report gate: refuse (unless acknowledged) if any file lacks a brand-outro card ---
-susp=$(python3 -c 'import json,sys
+susp=$("$PY" -c 'import json,sys
 try:
     d=json.load(open(sys.argv[1]))
     print(sum(p.get("suspect_count",0) for p in d.values() if isinstance(p,dict)))
@@ -69,6 +74,19 @@ if [ "$susp" -ne 0 ]; then
 fi
 
 echo "All gates passed. Destroying instance $ID (IRREVERSIBLE) ..."
-vastai destroy instance "$ID"
-vastai show instances || true
-echo "destroyed. source + deliverables remain on local disk at: $DEST"
+# `vastai destroy` prompts [y/N]; in a non-interactive shell it would read EOF and ABORT,
+# yet still return 0 — a false "destroyed" that leaves the box silently billing. Answer the
+# prompt explicitly, then VERIFY the instance is actually gone before claiming success.
+printf 'y\n' | vastai destroy instance "$ID" || true
+sleep 6
+if vastai show instances --raw 2>/dev/null | "$PY" -c '
+import json, sys
+d = json.load(sys.stdin)
+ids = [str(x.get("id")) for x in (d if isinstance(d, list) else [])]
+sys.exit(1 if sys.argv[1] in ids else 0)' "$ID"; then
+  echo "DESTROYED: instance $ID is gone. ALL billing stopped. source + deliverables remain at: $DEST"
+else
+  echo "!!! WARNING: instance $ID STILL appears after destroy — it may still be BILLING."
+  echo "    Re-run this, or destroy it in the Vast UI, and confirm it disappears."
+  exit 1
+fi
