@@ -419,7 +419,7 @@ def cmd_dub(args):
         src_renamed = v.get("renamed") or v["orig_name"]
         dubbed = dict(v.get("dubbed_outputs") or {})
         for tlang in targets:
-            if tlang == src_lang:
+            if tlang == src_lang and not getattr(args, "revoice_source", False):
                 # Original is already in this language — record it, no dub.
                 dubbed[tlang] = v.get("organized_path") or v["src_path"]
                 continue
@@ -929,6 +929,10 @@ def main():
                    help="comma list of ISO langs, e.g. it,fr,pt")
     p.add_argument("--voice", default=None)
     p.add_argument("--workers", type=int, default=2)
+    p.add_argument("--revoice-source", action="store_true",
+                   help="also TTS-dub the source language (don't keep original audio). "
+                        "Use when the original VO must be replaced — e.g. rebranding the "
+                        "spoken app name. Requires translations filled for the source lang too.")
     p.set_defaults(func=cmd_dub)
 
     p = sub.add_parser("framegrab"); p.add_argument("--src", required=True)

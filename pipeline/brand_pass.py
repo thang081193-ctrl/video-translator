@@ -361,6 +361,24 @@ def _is_target_aspect(w: int, h: int, target_w: int = W, target_h: int = H, tol:
     return abs((w / h) - (target_w / target_h)) <= tol
 
 
+# Cover (crop-fill) for sources up to ~9:16 wide; blur-pad anything wider.
+# A source NARROWER/taller than 9:16 (ar ≤ this) covers by cropping top/bottom,
+# which fills the frame with NO side bars and never touches the left/right edges
+# (so full-width burned-in text is safe). The user's "bóp ảnh" complaint is
+# exactly these narrow sources getting blur-padded sideways. Sources WIDER than
+# 9:16 (square 1:1, 4:5, landscape) keep blur-pad: cover would crop their sides
+# and chop full-width burned-in text — which violates the preserve-subtitle rule.
+# 9:16 = 0.5625; 0.60 ≈ +6% tolerance so true-9:16 sources still cover.
+COVER_MAX_AR = 0.60
+
+
+def _should_cover(w: int, h: int, max_ar: float = COVER_MAX_AR) -> bool:
+    """True → crop-fill (cover, crops top/bottom); False → blur-pad.
+    Cover only when source is no wider than ~9:16, so side edges (and any
+    full-width burned-in text) are preserved."""
+    return (w / h) <= max_ar
+
+
 def _compute_pad_layout(src_w: int, src_h: int) -> dict:
     """Compute visible bands when scaling source fit-within 1080x1920.
 
@@ -1271,9 +1289,9 @@ def brand_pass_video(
                 pre_crop = ""
                 eff_w, eff_h = src_w, src_h
 
-        is_target = _is_target_aspect(eff_w, eff_h)
-        log.info(f"Effective aspect: {eff_w}x{eff_h}  is_9:16={is_target}  "
-                 f"pad_bg={'yes' if pad_bg_image else 'no'}")
+        is_target = _should_cover(eff_w, eff_h)
+        log.info(f"Effective aspect: {eff_w}x{eff_h}  ar={eff_w/eff_h:.3f}  "
+                 f"cover={is_target}  pad_bg={'yes' if pad_bg_image else 'no'}")
 
         color = (
             f"eq=saturation={p['saturation']}:contrast={p['contrast']}:gamma={p['gamma']},"

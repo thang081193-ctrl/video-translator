@@ -1,5 +1,6 @@
 .env
 _quota_state.json
+_jobs/
 __pycache__/
 *.pyc
 *.wav

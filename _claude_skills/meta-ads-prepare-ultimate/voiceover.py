@@ -131,7 +131,18 @@ def cmd_voiceover(args):
             if not text.strip(): continue
             # native voices per language from app config (rotate within the lang for
             # variety); fall back to the 4 multilingual voices if a lang isn't mapped.
-            vlist = (app.get("vo", {}).get("voices") or {}).get(lang) or [v for v, _ in VOICE_ROTATION]
+            # If Opus tagged the clip with an on-screen narrator's sex (vo_gender =
+            # man|woman), use the matching gendered voice list so the VO sex matches
+            # the person reading on screen; otherwise the neutral rotation.
+            vo = app.get("vo", {})
+            g = (v.get("vo_gender") or "").lower()
+            if g in ("man", "male", "m"):
+                vlist = (vo.get("voices_male") or {}).get(lang)
+            elif g in ("woman", "women", "female", "f"):
+                vlist = (vo.get("voices_female") or {}).get(lang)
+            else:
+                vlist = None
+            vlist = vlist or (vo.get("voices") or {}).get(lang) or [v for v, _ in VOICE_ROTATION]
             vidx = (i + langs.index(lang)) % len(vlist)
             rate = app.get("vo", {}).get("rate", "+6%")
             tfolder = L.iso_to_english(lang); code = lang.upper()
