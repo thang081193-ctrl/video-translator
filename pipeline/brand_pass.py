@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import os
 import random
 import re
@@ -327,6 +328,53 @@ def _ffprobe_dims(path: str) -> tuple[int, int]:
     return int(w), int(h)
 
 
+def _ffprobe_display_dims(path: str) -> tuple[int, int]:
+    """TRUE display (w,h) the default-CLI filtergraph will see:
+    post display-matrix autorotation, post-SAR un-squish, as EVEN ints.
+
+    ffprobe reports CODED (pre-rotation) dims/SAR; ffmpeg autorotates BEFORE
+    the filtergraph (90/270 swaps coded w/h AND swaps SAR num/den). Routing on
+    these display dims (NOT coded dims) is what prevents the anamorphic-squish
+    trap: coded 720x1280 SAR40:33 has coded aspect 0.5625 (== 9:16, would
+    falsely COVER -> squish) but TRUE display 872x1280 = 0.681 -> blur-pads.
+
+    Use `-show_streams -of json` so `side_data_list` appears ONCE; never
+    `-show_entries side_data=rotation` (prints per-frame -> dozens of dup lines).
+    """
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_streams", "-of", "json", path],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    st = json.loads(out)["streams"][0]
+    w, h = int(st["width"]), int(st["height"])
+    sar_n, sar_d = 1, 1
+    sar_raw = st.get("sample_aspect_ratio")        # "40:33" | "1:1" | "0:1" | "N/A" | None
+    if sar_raw and ":" in sar_raw:
+        a, b = sar_raw.split(":")
+        try:
+            ai, bi = int(a), int(b)
+            if ai > 0 and bi > 0:                  # 0:1 / 0:0 / N:0 -> square
+                sar_n, sar_d = ai, bi
+        except ValueError:
+            pass                                   # "N/A" -> square
+    rot = 0
+    for sd in st.get("side_data_list", []):        # stream-level = single occurrence
+        if "rotation" in sd:
+            try:
+                rot = int(round(float(sd["rotation"])))
+            except (TypeError, ValueError):
+                rot = 0
+    rot %= 360                                     # -90 -> 270
+    if rot in (90, 270):                           # autorotate transposes dims AND SAR
+        w, h = h, w
+        sar_n, sar_d = sar_d, sar_n
+    disp_w = (w * sar_n) // sar_d
+    disp_w = max(2, (disp_w // 2) * 2)             # libx264 needs even dims
+    disp_h = max(2, (h // 2) * 2)
+    return disp_w, disp_h
+
+
 def _ffprobe_fps(path: str, default: str = "30") -> str:
     """Return the video stream's frame rate as an ffmpeg-ready rational string
     (e.g. "24/1", "30000/1001"). Falls back to `default` on any failure.
@@ -359,24 +407,6 @@ def _ffprobe_fps(path: str, default: str = "30") -> str:
 def _is_target_aspect(w: int, h: int, target_w: int = W, target_h: int = H, tol: float = 0.05) -> bool:
     """True if source aspect is within tol of target (default ±5% of 9:16)."""
     return abs((w / h) - (target_w / target_h)) <= tol
-
-
-# Cover (crop-fill) for sources up to ~9:16 wide; blur-pad anything wider.
-# A source NARROWER/taller than 9:16 (ar ≤ this) covers by cropping top/bottom,
-# which fills the frame with NO side bars and never touches the left/right edges
-# (so full-width burned-in text is safe). The user's "bóp ảnh" complaint is
-# exactly these narrow sources getting blur-padded sideways. Sources WIDER than
-# 9:16 (square 1:1, 4:5, landscape) keep blur-pad: cover would crop their sides
-# and chop full-width burned-in text — which violates the preserve-subtitle rule.
-# 9:16 = 0.5625; 0.60 ≈ +6% tolerance so true-9:16 sources still cover.
-COVER_MAX_AR = 0.60
-
-
-def _should_cover(w: int, h: int, max_ar: float = COVER_MAX_AR) -> bool:
-    """True → crop-fill (cover, crops top/bottom); False → blur-pad.
-    Cover only when source is no wider than ~9:16, so side edges (and any
-    full-width burned-in text) are preserved."""
-    return (w / h) <= max_ar
 
 
 def _compute_pad_layout(src_w: int, src_h: int) -> dict:
@@ -1058,6 +1088,7 @@ def brand_pass_video(
     pad_bg_image: str | None = None,
     bgm_replace_path: str | None = None,
     keep_original_voice: bool = False,
+    detect_baked_padding: bool = False,
     work_root: str | None = None,
     random_seed: int | None = None,
 ) -> str:
@@ -1073,6 +1104,13 @@ def brand_pass_video(
     source and trims the trailing static end-card the video ends on (e.g. a
     competitor's app catalog screen). Only trims when a freeze segment reaches
     EOF; videos ending on motion (e.g. a UGC testimonial) are left intact.
+
+    Baked-padding strip: `detect_baked_padding=True` opts into the legacy
+    side-blur / dark-bar detectors that CROP into the frame. Default False —
+    the default path NEVER crops into content (squish-proof by construction for
+    no-QA batches); it frames purely by the file's true DISPLAY aspect
+    (post-autorotate, post-SAR via `_ffprobe_display_dims`) and always
+    un-anamorphs to square pixels before cover/pad.
 
     `random_seed=None` → fresh random each call. `random_seed=<int>` → deterministic.
     Explicit `voice` / `outro_duration` override the jittered pick.
@@ -1264,34 +1302,47 @@ def brand_pass_video(
             log.info(f"MUSICMIX final={fmeas['input_i'] if fmeas else None}LUFS "
                      f"tp={fmeas['input_tp'] if fmeas else None}")
 
-        # 6. Video transforms (side-blur aware, aspect-aware)
-        # Order: detect baked padding first → compute EFFECTIVE aspect on real
-        # content → branch on that. Sources that are 9:16 on disk but contain
-        # baked-in side blur (a narrower original padded with blurred edges)
-        # have effective aspect closer to 1:1 / 4:5 once stripped, and many
-        # 4:5 / 1:1 sources are actually 9:16 content after stripping.
-        src_w, src_h = _ffprobe_dims(working_input)
+        # 6. Video transforms (DISPLAY-aspect framing — squish-proof by construction)
+        # Route purely on the file's TRUE display aspect (post-autorotate,
+        # post-SAR), never on coded pixel dims. Always un-anamorph to square
+        # pixels BEFORE cover/pad. Baked-padding detectors that crop into the
+        # frame are OPT-IN (detect_baked_padding) and never run by default, so
+        # the default path can never crop real content into a blur-pad squish.
+        src_w, src_h = _ffprobe_dims(working_input)            # CODED (for opt-in crop windows)
+        disp_w, disp_h = _ffprobe_display_dims(working_input)  # TRUE display (routing)
 
-        side_blur = _detect_side_blur(working_input, src_w, src_h)
-        if side_blur:
-            sb_x, sb_w = side_blur
-            pre_crop = f"crop={sb_w}:{src_h}:{sb_x}:0,"
-            eff_w, eff_h = sb_w, src_h
-            log.info(f"Side-blur stripped: {src_w}x{src_h} → {sb_w}x{src_h} at x={sb_x}")
-        else:
-            crop_region = _detect_content_crop(working_input, src_w, src_h)
-            if crop_region:
-                cw, ch, cx, cy = crop_region
-                pre_crop = f"crop={cw}:{ch}:{cx}:{cy},"
-                eff_w, eff_h = cw, ch
-                log.info(f"Auto-strip baked bars: {src_w}x{src_h} → {cw}x{ch} at ({cx},{cy})")
+        # Un-anamorph prefix: square pixels using ffmpeg's per-frame 'sar' var,
+        # which is the POST-autorotate SAR. No-op when SAR==1. trunc(.../2)*2
+        # keeps width even for libx264. Prepended to EVERY chain touching pixels.
+        unanam = "scale='trunc(iw*sar/2)*2':ih,setsar=1,"
+
+        pre_crop = ""
+        if detect_baked_padding:
+            # OPT-IN ONLY. Detectors measure CODED pixels, so the crop window is
+            # valid only in pre-un-anamorph geometry -> pre_crop MUST precede unanam.
+            side_blur = _detect_side_blur(working_input, src_w, src_h)
+            if side_blur:
+                sb_x, sb_w = side_blur
+                pre_crop = f"crop={sb_w}:{src_h}:{sb_x}:0,"
+                log.info(f"Side-blur stripped (opt-in): {src_w}x{src_h} -> {sb_w}x{src_h} at x={sb_x}")
             else:
-                pre_crop = ""
-                eff_w, eff_h = src_w, src_h
+                crop_region = _detect_content_crop(working_input, src_w, src_h)
+                if crop_region:
+                    cw, ch, cx, cy = crop_region
+                    pre_crop = f"crop={cw}:{ch}:{cx}:{cy},"
+                    log.info(f"Auto-strip baked bars (opt-in): {src_w}x{src_h} -> {cw}x{ch} at ({cx},{cy})")
 
-        is_target = _should_cover(eff_w, eff_h)
-        log.info(f"Effective aspect: {eff_w}x{eff_h}  ar={eff_w/eff_h:.3f}  "
-                 f"cover={is_target}  pad_bg={'yes' if pad_bg_image else 'no'}")
+        # PRE = optional coded-space crop, THEN un-anamorph. Order required: the
+        # detector window is coded-pixel-valid; un-anamorph targets true display.
+        pre = f"{pre_crop}{unanam}"
+
+        # Route on DISPLAY aspect. Within +-0.05 of 9:16 -> COVER (no crop).
+        # Wider/narrower -> blur-PAD (never cut burned-in side/edge text).
+        is_target = _is_target_aspect(disp_w, disp_h)
+        log.info(f"Display aspect: {disp_w}x{disp_h} ({disp_w/disp_h:.4f})  "
+                 f"is_9:16={is_target}  coded={src_w}x{src_h}  "
+                 f"detect_baked_padding={detect_baked_padding}  "
+                 f"pad_bg={'yes' if pad_bg_image else 'no'}")
 
         color = (
             f"eq=saturation={p['saturation']}:contrast={p['contrast']}:gamma={p['gamma']},"
@@ -1299,25 +1350,32 @@ def brand_pass_video(
         )
 
         if is_target:
-            # === Branch 6a: pre-crop (if any) → zoom + crop (jittered) ===
+            # === Branch 6a: COVER-fill 1080x1920 (un-anamorph -> zoom + jittered crop) ===
+            # Trailing setsar=1: force_original_aspect_ratio=increase rounding can
+            # leave SAR like 3663:3664; the final crop to even W,H constants then
+            # guarantees an even 1080x1920 SAR 1:1 output regardless of the
+            # odd zoom intermediate.
             scaled_w = int(W * p["zoom"])
             scaled_h = int(H * p["zoom"])
             zoom_crop = (
-                f"{pre_crop}"
+                f"{pre}"
                 f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
-                f"crop={W}:{H}:(in_w-{W})/2+({p['crop_dx']}):(in_h-{H})/2+({p['crop_dy']})"
+                f"crop={W}:{H}:(in_w-{W})/2+({p['crop_dx']}):(in_h-{H})/2+({p['crop_dy']}),"
+                f"setsar=1"
             )
             bg_filter = f"{zoom_crop},{color}"
             bg_inputs = ["-i", working_input]
             bg_label = "[0:v]"
             n_bg_inputs = 1
         else:
-            # === Branch 6b: blur-pad bg + fit-within content (max content) ===
-            # pre_crop was computed above (side-blur or dark-bar strip).
+            # === Branch 6b: blur-PAD bg + fit-within content (max content) ===
+            # PRE (un-anamorph, + opt-in crop) is prepended to BOTH bg and fg so
+            # anamorphic sources are squared FIRST, then fit-within full 1080x1920.
             # Background = scaled-COVER + cropped + boxblur (modern Reels look).
             # Foreground = scaled fit-within full 1080x1920 (no safe-zone trim).
             # Brand visibility via corner watermark (step 7) + outro card (step 8).
-            # If pad_bg_image given, use it as bg (legacy band layout).
+            # If pad_bg_image given, use it as bg (legacy band layout); the fg
+            # still gets PRE so a supplied bg never hides an anamorphic squish.
 
             if pad_bg_image:
                 bg_chunk = f"[1:v]scale={W}:{H},setsar=1[bgblur]"
@@ -1326,7 +1384,7 @@ def brand_pass_video(
                 log.info("Bg: pad_bg_image (legacy bands layout)")
             else:
                 bg_chunk = (
-                    f"[0:v]{pre_crop}scale={W}:{H}:force_original_aspect_ratio=increase,"
+                    f"[0:v]{pre}scale={W}:{H}:force_original_aspect_ratio=increase,"
                     f"crop={W}:{H},boxblur=20:5,setsar=1[bgblur]"
                 )
                 bg_inputs_extra = []
@@ -1334,10 +1392,10 @@ def brand_pass_video(
                 log.info("Bg: blur-pad (max content)")
 
             fg_chunk = (
-                f"[0:v]{pre_crop}scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                f"[0:v]{pre}scale={W}:{H}:force_original_aspect_ratio=decrease,"
                 f"setsar=1,{color}[fg]"
             )
-            overlay_chunk = "[bgblur][fg]overlay=(W-w)/2:(H-h)/2:shortest=1"
+            overlay_chunk = "[bgblur][fg]overlay=(W-w)/2:(H-h)/2:shortest=1,setsar=1"
             bg_filter = ";".join([bg_chunk, fg_chunk, overlay_chunk])
             bg_inputs = ["-i", working_input] + bg_inputs_extra
             n_bg_inputs = 1 + n_extra
