@@ -1,6 +1,15 @@
 # PlantSmart 0630 — lỗi "bóp ảnh" (blur side-bar) + cách fix + danh sách file
 
 > File này nằm TRONG git để PC nào pull repo cũng có đủ. Tổng hợp 2026-06-30.
+>
+> ⚠️ **CẬP NHẬT 2026-07-01 — ĐÃ CÓ FIX GỐC (merge `7bf7c2e`).** `COVER_MAX_AR/_should_cover`
+> mô tả bên dưới CHỈ là guard 1 phần (vẫn chạy `_detect_side_blur` cũ → vẫn có thể
+> false-positive). Fix gốc đã thay: `brand_pass_video` route theo **display-aspect
+> thật** (`_ffprobe_display_dims`, xử lý SAR + rotation), **luôn un-anamorph**, và
+> `_detect_side_blur`/`_detect_content_crop` thành **opt-in** (`detect_baked_padding=False`
+> mặc định → mặc định KHÔNG bao giờ crop vào content). Gate verify: `scripts/audit_sidebar_blur.py`.
+> Toàn bộ 106 file 0630 bị lỗi đã render lại (giữ audio + branding). Chi tiết: 22 test
+> trong `tests/test_framing_squish.py`.
 
 ## Triệu chứng
 Một số video output 9:16 bị nội dung **bóp thành 1 dải hẹp ở giữa**, hai bên là
