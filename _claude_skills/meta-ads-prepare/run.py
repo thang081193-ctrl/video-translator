@@ -37,7 +37,8 @@ from pipeline.brand_pass import brand_pass_video  # noqa: E402
 def process_one(args):
     (src_path, dst_path, seed, watermark, watermark_size,
      outro_title, outro_subtitle, outro_logo, outro_logo_size,
-     brand_bg, trim_endcard, bgm_replace, outro_video) = args
+     brand_bg, trim_endcard, bgm_replace, outro_video,
+     keep_voice, assume_voice) = args
     src = Path(src_path)
     dst = Path(dst_path)
     if dst.exists() and dst.stat().st_size > 100_000:
@@ -53,6 +54,17 @@ def process_one(args):
             trim_endcard=trim_endcard,
             random_seed=seed,
         )
+        if keep_voice:
+            # Preserve the REAL source voice (Demucs vocals over the BGM bed).
+            # Without this flag brand_pass TTS-re-dubs via an ENGLISH Edge voice,
+            # which renders near-silent on non-English transcripts -> the
+            # "loud BGM + missing voice" defect (UA report 2026-07-03).
+            kwargs["keep_original_voice"] = True
+            if assume_voice:
+                # Skip Whisper entirely (every clip is known-voiced). The
+                # transcript CONTENT is unused on the keep-voice path — it only
+                # needs to be non-empty so has_voice stays True.
+                kwargs["transcript"] = "keep original voice"
         if watermark:
             kwargs["watermark_image"] = watermark
             kwargs["watermark_size"] = watermark_size
@@ -153,6 +165,16 @@ def main():
                     help="1080x1920 brand-designed PNG canvas for non-9:16 sources")
     ap.add_argument("--trim-endcard", action="store_true",
                     help="Auto-detect + trim competitor end-card from source tail")
+    ap.add_argument("--keep-voice", action="store_true",
+                    help="Keep the ORIGINAL source voice (Demucs vocals over the BGM "
+                         "bed) instead of the default English TTS re-dub. REQUIRED for "
+                         "any keep-original-voice batch — non-English clips otherwise "
+                         "render with a near-silent voice (loud-BGM/no-voice defect).")
+    ap.add_argument("--assume-voice", action="store_true",
+                    help="With --keep-voice: skip Whisper and treat EVERY clip as "
+                         "voiced. Use when the whole batch is known-voiced or Whisper "
+                         "is broken on this machine. Music-only clips will error "
+                         "(DegradedError) — route those through a separate run.")
     ap.add_argument("--bgm-pool", default=None,
                     help="Folder of royalty-free BGM tracks. With --bgm-mode by-mood, "
                          "expects cluster subfolders (e.g. A_cinematic/, B_indiepop/).")
@@ -207,9 +229,13 @@ def main():
         jobs.append((src, dst, seed, args.watermark, args.watermark_size,
                      args.outro_title, args.outro_subtitle, outro_logo,
                      args.outro_logo_size, args.brand_bg, args.trim_endcard,
-                     bgm_replace, args.outro_video))
+                     bgm_replace, args.outro_video,
+                     args.keep_voice, args.assume_voice))
+    voice_mode = ("KEEP-ORIGINAL" + ("+assume-voice" if args.assume_voice else "")
+                  if args.keep_voice else "TTS-redub (EN)")
     print(f"Total jobs: {len(jobs)}  workers={args.workers}  "
           f"endcard_trim={args.trim_endcard}  brand_bg={'yes' if args.brand_bg else 'no'}  "
+          f"voice={voice_mode}  "
           f"bgm_pool={'yes (mode=' + args.bgm_mode + ')' if bgm_pool else 'no (use source BGM)'}",
           flush=True)
 
