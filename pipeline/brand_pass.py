@@ -958,6 +958,31 @@ def _render_bgm_bed(bgm_path: str, offset: float, total_dur: float, out_wav: str
     return out_wav
 
 
+def _render_music_bed(bgm: str, music_gain: float, total_dur: float,
+                      loop: bool, mixed_audio: str) -> None:
+    """Render the music-only audio bed: `bgm` at `music_gain`, exactly total_dur.
+
+    `loop` wraps a short REPLACEMENT track so it fills the whole runtime. It
+    MUST be False when `bgm` is the clip's own audio (Demucs stem / raw
+    passthrough): `-stream_loop -1` makes the input infinite, so `apad` never
+    fires and the outro region replays the clip's first seconds — the ad's
+    opening hook playing a second time over the brand card. Unlooped, `apad`
+    pads that region with silence and `-t` still lands on total_dur.
+    """
+    r = subprocess.run(
+        ["ffmpeg", "-y",
+         *(["-stream_loop", "-1"] if loop else []),
+         "-i", bgm,
+         "-af", f"volume={music_gain:+.2f}dB,apad=whole_dur={total_dur:.3f},"
+                f"alimiter=limit=0.891:level=false",
+         "-t", f"{total_dur:.3f}",
+         "-c:a", "aac", "-b:a", "192k", mixed_audio],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg audio failed (exit {r.returncode}): {r.stderr[-800:]}")
+
+
 def _mix_voice_over_bgm(
     bgm: str,
     voice_track: str,
@@ -965,8 +990,9 @@ def _mix_voice_over_bgm(
     margin_db: float,
     mixed_audio: str,
     legacy_bgm_vol: float | None = None,
+    loop_bgm: bool = True,
 ) -> dict:
-    """Mix the voice track over looped BGM into `mixed_audio` (AAC 192k).
+    """Mix the voice track over BGM into `mixed_audio` (AAC 192k).
 
     Default (measured) mode: both stems are loudness-measured; voice gets a
     linear gain to VOICE_TARGET_LUFS, BGM lands `margin_db` below the voice,
@@ -978,6 +1004,11 @@ def _mix_voice_over_bgm(
     `legacy_bgm_vol` reproduces the pre-v2 blind-ratio mix exactly (callers
     passing an explicit bgm_volume) — measured QA numbers are logged only.
 
+    `loop_bgm` wraps a short BGM track to fill total_dur. Pass False whenever
+    the bed IS the clip's own audio (Demucs stem / passthrough): looping makes
+    the input infinite, `apad` never fires, and the outro region replays the
+    clip's opening instead of falling silent.
+
     Returns the QA dict: mode, voice_in, bgm_in, voice_gain, bgm_gain,
     margin_db, final_i, final_tp, verdict.
     """
@@ -987,7 +1018,8 @@ def _mix_voice_over_bgm(
         qa["mode"] = "legacy_ratio"
         r = subprocess.run(
             ["ffmpeg", "-y",
-             "-stream_loop", "-1", "-i", bgm,
+             *(["-stream_loop", "-1"] if loop_bgm else []),
+             "-i", bgm,
              "-i", voice_track,
              "-filter_complex",
              f"[1:a]volume=1.0,apad[v0];"
@@ -1029,7 +1061,8 @@ def _mix_voice_over_bgm(
     for attempt in (1, 2):
         r = subprocess.run(
             ["ffmpeg", "-y",
-             "-stream_loop", "-1", "-i", bgm,
+             *(["-stream_loop", "-1"] if loop_bgm else []),
+             "-i", bgm,
              "-i", voice_track,
              "-filter_complex",
              f"[1:a]volume={voice_gain:+.2f}dB,apad[v0];"
@@ -1250,6 +1283,13 @@ def brand_pass_video(
         else:
             bgm = src_audio  # passthrough — no separation needed
 
+        # Loop ONLY a replacement track. Every other bed IS the clip's own audio
+        # (Demucs stem or raw passthrough) and runs exactly working_dur, i.e. it
+        # ends where the outro begins. Looping it makes the input INFINITE, which
+        # starves `apad` — so instead of silence under the brand card the tail
+        # replays the clip's first outro_dur seconds (the ad's opening hook).
+        loop_bgm = bgm_replace_path is not None
+
         if has_voice:
             # VOICE PATH: voice over BGM, measured voice-first mix (see
             # _mix_voice_over_bgm). voice source = original isolated vocals
@@ -1267,7 +1307,7 @@ def brand_pass_video(
             qa = _mix_voice_over_bgm(
                 bgm, voice_track, total_dur,
                 margin_db=p["bgm_margin_db"], mixed_audio=mixed_audio,
-                legacy_bgm_vol=p["bgm_vol"],
+                legacy_bgm_vol=p["bgm_vol"], loop_bgm=loop_bgm,
             )
             log.info(
                 "VOICEMIX "
@@ -1277,27 +1317,19 @@ def brand_pass_video(
                 f"tp={qa.get('final_tp')} {qa.get('verdict')}"
             )
         else:
-            # MUSIC-ONLY PATH: BGM looped/padded to total_dur. A replacement
-            # track is loudness-normalized to MUSIC_TARGET_LUFS (royalty-free
-            # masters vary -7..-20 LUFS); the source's own mix passes through
-            # untouched to preserve its original level.
+            # MUSIC-ONLY PATH: BGM stretched to total_dur — a replacement track
+            # loops, the clip's own audio is silence-padded under the outro (see
+            # loop_bgm). A replacement track is loudness-normalized to
+            # MUSIC_TARGET_LUFS (royalty-free masters vary -7..-20 LUFS); the
+            # source's own mix passes through untouched to preserve its level.
             music_gain = 0.0
             if bgm_replace_path:
                 bmeas = measure_loudness(bgm)
                 if bmeas is not None:
                     music_gain = _clamp(MUSIC_TARGET_LUFS - bmeas["input_i"], -20.0, 20.0)
-            log.info(f"Music-only: {os.path.basename(bgm)} gain={music_gain:+.1f}dB → {total_dur:.2f}s")
-            r = subprocess.run(
-                ["ffmpeg", "-y",
-                 "-stream_loop", "-1", "-i", bgm,
-                 "-af", f"volume={music_gain:+.2f}dB,apad=whole_dur={total_dur:.3f},"
-                        f"alimiter=limit=0.891:level=false",
-                 "-t", f"{total_dur:.3f}",
-                 "-c:a", "aac", "-b:a", "192k", mixed_audio],
-                capture_output=True, text=True,
-            )
-            if r.returncode != 0:
-                raise RuntimeError(f"ffmpeg audio failed (exit {r.returncode}): {r.stderr[-800:]}")
+            log.info(f"Music-only: {os.path.basename(bgm)} gain={music_gain:+.1f}dB "
+                     f"loop={loop_bgm} → {total_dur:.2f}s")
+            _render_music_bed(bgm, music_gain, total_dur, loop_bgm, mixed_audio)
             fmeas = measure_loudness(mixed_audio)
             log.info(f"MUSICMIX final={fmeas['input_i'] if fmeas else None}LUFS "
                      f"tp={fmeas['input_tp'] if fmeas else None}")

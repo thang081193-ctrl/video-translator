@@ -46,17 +46,22 @@ def build(app: str = "", batch: str = "", processed_date: str | None = None,
     return "|".join(parts)
 
 
-def read_comment(path: str | Path) -> str:
-    """Return the mp4 container `comment` tag (empty string if none/error)."""
+def _read_format_tag(path: str | Path, tag: str) -> str:
+    """Return one mp4 container format tag (empty string if none/error)."""
     try:
         r = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format_tags=comment",
+            ["ffprobe", "-v", "error", "-show_entries", f"format_tags={tag}",
              "-of", "default=nw=1:nk=1", str(path)],
             capture_output=True, text=True, timeout=30,
         )
         return (r.stdout or "").strip()
     except Exception:
         return ""
+
+
+def read_comment(path: str | Path) -> str:
+    """Return the mp4 container `comment` tag (empty string if none/error)."""
+    return _read_format_tag(path, "comment")
 
 
 def is_processed(path: str | Path) -> bool:
@@ -84,15 +89,22 @@ def stamp(path: str | Path, signature: str) -> tuple[bool, str]:
     """Write `signature` into the mp4 comment in-place (stream-copy, atomic).
 
     Returns (ok, err). Idempotent — re-stamping just overwrites the comment.
+
+    brand_pass writes a RANDOMIZED `creation_time` as a fingerprint element.
+    The mp4 muxer does NOT carry that tag across a remux, so stamping would
+    silently erase it — re-apply it explicitly here.
     """
     path = Path(path)
+    creation_time = _read_format_tag(path, "creation_time")
     fd, tmp = tempfile.mkstemp(suffix=".mp4", dir=str(path.parent))
     os.close(fd)
     try:
+        cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(path), "-map", "0",
+               "-c", "copy", "-metadata", "comment=" + signature]
+        if creation_time:
+            cmd += ["-metadata", "creation_time=" + creation_time]
         r = subprocess.run(
-            ["ffmpeg", "-y", "-v", "error", "-i", str(path), "-map", "0",
-             "-c", "copy", "-metadata", "comment=" + signature, tmp],
-            capture_output=True, text=True, timeout=600,
+            [*cmd, tmp], capture_output=True, text=True, timeout=600,
         )
         if r.returncode != 0:
             return False, (r.stderr or r.stdout or "ffmpeg failed")[-300:]
