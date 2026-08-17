@@ -158,18 +158,39 @@ def _separate_via_subprocess(audio_path: str, demucs_dir: str, model: str) -> No
     _verify_stems_written(audio_path, demucs_dir, model)
 
 
+def _api_separate_and_save(sep, audio_path: str, demucs_dir: str, model: str) -> None:
+    """demucs>=4.1 api: separate_audio_file(file) -> (origin, {stem: tensor}).
+
+    The high-level API no longer takes an output dir and no longer writes to
+    disk itself — it returns the stem tensors. We sum the non-vocal stems into
+    `no_vocals` and save both into the same layout the subprocess CLI produces
+    (`demucs_dir/model/base_name/{vocals,no_vocals}.wav`).
+    """
+    from pathlib import Path
+    from demucs.api import save_audio
+    _origin, stems = sep.separate_audio_file(Path(audio_path))
+    vocals_t = stems["vocals"]
+    no_vocals_t = None
+    for name, t in stems.items():
+        if name == "vocals":
+            continue
+        no_vocals_t = t if no_vocals_t is None else no_vocals_t + t
+    vpath, nvpath = _stem_paths(audio_path, demucs_dir, model)
+    os.makedirs(os.path.dirname(vpath), exist_ok=True)
+    save_audio(vocals_t, vpath, samplerate=sep.samplerate)
+    save_audio(no_vocals_t, nvpath, samplerate=sep.samplerate)
+
+
 def _separate_via_api(separator, audio_path: str, demucs_dir: str, model: str) -> None:
     """In-process separation via `demucs.api.Separator`.
 
     On OOM, evicts the GPU separator, marks GPU unavailable, and retries
     with a fresh CPU separator. Uses the high-level `separate_audio_file`
-    API which writes stems to disk in the same layout as the subprocess
-    CLI (so callers don't need to know which path was taken).
+    API which returns stem tensors we then save to disk in the same layout as
+    the subprocess CLI (so callers don't need to know which path was taken).
     """
     try:
-        # Modern demucs API: separate_audio_file writes to disk via the
-        # caller-provided output dir. Older versions: returns dict of stems.
-        separator.separate_audio_file(audio_path, str(demucs_dir))
+        _api_separate_and_save(separator, audio_path, demucs_dir, model)
     except RuntimeError as e:
         if "out of memory" not in str(e).lower() and "OOM" not in str(e):
             raise
@@ -179,7 +200,7 @@ def _separate_via_api(separator, audio_path: str, demucs_dir: str, model: str) -
         cpu_sep = _get_separator(model)  # will load CPU now (sticky flag)
         if cpu_sep is None:
             raise  # demucs.api disappeared mid-call, give up
-        cpu_sep.separate_audio_file(audio_path, str(demucs_dir))
+        _api_separate_and_save(cpu_sep, audio_path, demucs_dir, model)
     _verify_stems_written(audio_path, demucs_dir, model)
 
 
