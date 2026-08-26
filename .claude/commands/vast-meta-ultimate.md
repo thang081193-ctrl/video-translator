@@ -19,6 +19,30 @@ machines with `scripts/vastai-sync.sh`. Convention: the job lives at `/workspace
 on Vast, `<local-batch-dir>` locally; the whole job folder (incl. `_ultimate/manifest.json`)
 is what you sync.
 
+## ⛔ HARD RULE — never inspect video CONTENT unless the operator asks
+
+**Do not look at what the videos are about. Absolute.** No contact sheets built to
+classify the ads, no tallying what each clip pitches, no proposing exclusions on
+content grounds, no "let me just check the sources first". If the operator wants that,
+they will ask — `analyze-ad-angles` is the skill for it. Run the pipeline and report
+**technical** results only: counts, cut seconds, QA numbers, errors.
+
+This is not a default to override because a batch "looks like it needs a look". The
+operator scoped the run; re-opening that scope burns exactly the turnaround this skill
+exists to protect. Asking "should I screen these first?" is also a violation — the
+answer is already no.
+
+**NOT covered by this rule** — these are pixel measurements the pipeline itself needs,
+not content inspection:
+- decoding tail frames to place an end-card cut (`--trim-endcard` / the cut-point pass)
+- **building** the end-frame QA montage — build it, don't interpret it. Phase 4 hands it
+  to the operator; their eyes are the authority on the visual gate, not yours.
+- mechanical QA: dimensions, audio present, duration, outro-frame match, file size
+
+Origin: 2026-08-26, Caller ID 26Aug. The run was scoped "skip đọc và phân loại video,
+chỉ chèn logo và cắt outro đối thủ" and contact sheets got built anyway. See
+`feedback_no_content_screening_when_skip` in memory.
+
 ## Divide & conquer — when the human is needed (and when NOT)
 
 The whole point: **the operator is needed at EXACTLY TWO brief moments; everything else is
