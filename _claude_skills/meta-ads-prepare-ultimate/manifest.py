@@ -199,6 +199,20 @@ def transcribe_one(model, video: Path) -> dict:
 
 def load_whisper(model_size: str = "small"):
     from faster_whisper import WhisperModel
+    # Device override: ULTIMATE_WHISPER_DEVICE=cuda uses a local GPU when one is
+    # present + working (falls back to CPU int8 on any load error, so a broken
+    # cuDNN never aborts a scan). Default stays CPU int8 -- unchanged behaviour.
+    dev = os.environ.get("ULTIMATE_WHISPER_DEVICE", "cpu").strip().lower()
+    if dev == "cuda":
+        ct = os.environ.get("ULTIMATE_WHISPER_COMPUTE", "float16")
+        try:
+            print(f"[whisper] loading '{model_size}' (CUDA {ct}) ...", flush=True)
+            m = WhisperModel(model_size, device="cuda", compute_type=ct)
+            print("[whisper] ready (GPU)", flush=True)
+            return m
+        except Exception as e:
+            print(f"[whisper] CUDA load failed ({type(e).__name__}: {e}); "
+                  f"falling back to CPU int8", flush=True)
     print(f"[whisper] loading '{model_size}' (CPU int8) ...", flush=True)
     m = WhisperModel(model_size, device="cpu", compute_type="int8")
     print("[whisper] ready", flush=True)
@@ -212,7 +226,10 @@ def load_whisper(model_size: str = "small"):
 #   outro_variant  man|woman (hair talking-head videos) — drives outro routing
 OPUS_FIELDS = ("vertical", "language", "language_folder", "lang_code",
                "angle", "hook", "copy", "headlines", "primary_texts",
-               "bgm_cluster", "outro_variant")
+               "bgm_cluster", "outro_variant",
+               # niche/campaign + reviewed end-card cut: judgement calls that a
+               # re-scan must never clobber.
+               "niche", "endcard_cut", "bgm_only", "market_hint", "no_watermark")
 
 
 def scan(src_root: Path, model_size: str = "small",

@@ -38,7 +38,7 @@ def process_one(args):
     (src_path, dst_path, seed, watermark, watermark_size,
      outro_title, outro_subtitle, outro_logo, outro_logo_size,
      brand_bg, trim_endcard, bgm_replace, outro_video,
-     keep_voice, assume_voice) = args
+     keep_voice, assume_voice, keep_audio) = args
     src = Path(src_path)
     dst = Path(dst_path)
     if dst.exists() and dst.stat().st_size > 100_000:
@@ -54,7 +54,15 @@ def process_one(args):
             trim_endcard=trim_endcard,
             random_seed=seed,
         )
-        if keep_voice:
+        if keep_audio:
+            # KEEP THE SOURCE AUDIO EXACTLY AS-IS. Empty transcript -> has_voice
+            # False -> brand_pass takes the music-only path: no Whisper, no
+            # Demucs, no TTS, the clip's own track passes through untouched and
+            # is silence-padded under the outro. This is the route for
+            # keep-original batches where the clips are NOT to be inspected or
+            # re-dubbed (DecoAI 1307, Plant 1307, Caller ID 26Aug).
+            kwargs["transcript"] = ""
+        elif keep_voice:
             # Preserve the REAL source voice (Demucs vocals over the BGM bed).
             # Without this flag brand_pass TTS-re-dubs via an ENGLISH Edge voice,
             # which renders near-silent on non-English transcripts -> the
@@ -165,6 +173,11 @@ def main():
                     help="1080x1920 brand-designed PNG canvas for non-9:16 sources")
     ap.add_argument("--trim-endcard", action="store_true",
                     help="Auto-detect + trim competitor end-card from source tail")
+    ap.add_argument("--keep-audio", action="store_true",
+                    help="Keep the source audio EXACTLY as-is (music-only "
+                         "passthrough: no Whisper, no Demucs, no TTS). Use for "
+                         "keep-original batches with no dub and no content "
+                         "inspection. Wins over --keep-voice if both are given.")
     ap.add_argument("--keep-voice", action="store_true",
                     help="Keep the ORIGINAL source voice (Demucs vocals over the BGM "
                          "bed) instead of the default English TTS re-dub. REQUIRED for "
@@ -230,9 +243,13 @@ def main():
                      args.outro_title, args.outro_subtitle, outro_logo,
                      args.outro_logo_size, args.brand_bg, args.trim_endcard,
                      bgm_replace, args.outro_video,
-                     args.keep_voice, args.assume_voice))
-    voice_mode = ("KEEP-ORIGINAL" + ("+assume-voice" if args.assume_voice else "")
-                  if args.keep_voice else "TTS-redub (EN)")
+                     args.keep_voice, args.assume_voice, args.keep_audio))
+    if args.keep_audio:
+        voice_mode = "KEEP-AUDIO-ASIS (music-only passthrough, no Whisper/Demucs/TTS)"
+    elif args.keep_voice:
+        voice_mode = "KEEP-ORIGINAL" + ("+assume-voice" if args.assume_voice else "")
+    else:
+        voice_mode = "TTS-redub (EN)"
     print(f"Total jobs: {len(jobs)}  workers={args.workers}  "
           f"endcard_trim={args.trim_endcard}  brand_bg={'yes' if args.brand_bg else 'no'}  "
           f"voice={voice_mode}  "

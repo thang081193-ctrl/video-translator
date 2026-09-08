@@ -517,15 +517,31 @@ def _brand_worker(job: dict) -> tuple[str, str, float, str]:
             outro_title=job["outro_title"], outro_subtitle=job["outro_subtitle"],
             trim_endcard=job["trim_endcard"], random_seed=job["seed"],
         )
+        if job.get("enhance"):
+            kwargs["enhance"] = job["enhance"]
+        if job.get("trim_to"):
+            kwargs["trim_to"] = job["trim_to"]
         if job["watermark"]:
             kwargs["watermark_image"] = job["watermark"]
             kwargs["watermark_size"] = job["watermark_size"]
+        elif job.get("no_watermark"):
+            # empty text + no image = brand_pass skips the overlay entirely.
+            # Without the empty text it would drawtext its DEFAULT_WATERMARK.
+            kwargs["watermark_text"] = ""
         if job["outro_logo"]:
             kwargs["outro_logo_image"] = job["outro_logo"]
         if job["outro_video"]:
             kwargs["outro_video"] = job["outro_video"]
         if job["bgm_replace"]:
-            kwargs["bgm_replace_path"] = job["bgm_replace"]
+            # "under" lays the track beneath the clip's own audio (nothing muted);
+            # "replace" swaps the source audio out for it, the historical default.
+            if job.get("bgm_mode") == "under":
+                kwargs["bgm_under_path"] = job["bgm_replace"]
+                kwargs["bgm_under_gain"] = job["bgm_under_gain"]
+            else:
+                kwargs["bgm_replace_path"] = job["bgm_replace"]
+        if job.get("out_size"):
+            kwargs["out_size"] = job["out_size"]
         brand_pass_video(**kwargs)
         return ("ok", job["id"], time.time() - t0, "")
     except Exception as e:
@@ -557,6 +573,21 @@ def cmd_brandpass(args):
     want_vertical = args.vertical
     target_langs = _parse_langs(args.target_langs)  # optional filter on dub outputs
 
+    # Non-standard output canvas (e.g. 1026x1824) — every encoded dimension
+    # differs from the 1080x1920 everyone else ships, at identical framing.
+    out_size = None
+    if getattr(args, "out_size", None):
+        try:
+            ow, oh = (int(x) for x in args.out_size.lower().split("x"))
+        except ValueError:
+            sys.exit(f"--out-size must look like 1026x1824, got {args.out_size!r}")
+        if ow % 2 or oh % 2:
+            sys.exit(f"--out-size must be even on both axes, got {ow}x{oh}")
+        out_size = (ow, oh)
+
+    if getattr(args, "bgm_mode", "replace") == "under" and not args.bgm_pool:
+        sys.exit("--bgm-mode under needs --bgm-pool (there is no track to lay under)")
+
     pool = None; cluster_map = {}
     if args.bgm_pool:
         pool = Path(args.bgm_pool).resolve()
@@ -565,19 +596,38 @@ def cmd_brandpass(args):
         cluster_map = _load_cluster_map(pool)
 
     def _mkjob(v, okey, inp, out_path, keep_voice, seed):
+        # --keep-audio: ship the clip's OWN audio untouched. brand_pass treats an
+        # empty transcript as the music-only path, which passes the source audio
+        # through instead of running Demucs and re-mixing it. Language routing of
+        # the OUTPUT is unaffected -- a voiced clip still lands in its language
+        # campaign, it just keeps the voice it already has.
+        if getattr(args, "keep_audio", False):
+            keep_voice = False
         transcript = (v.get("transcript") or "x") if keep_voice else ""
         bgm = None
         if pool:
             rng = random.Random(seed if seed is not None else hash(f"{v['id']}_{okey}"))
             cluster = v.get("bgm_cluster") or cluster_map.get(v["orig_name"])
             bgm = _pick_bgm(cluster, pool, rng)
+        # Per-clip watermark opt-out: a source that already carries a competitor
+        # logo in the top-left would otherwise end up with TWO logos stacked in
+        # the same corner. Set `no_watermark` on those entries.
+        wm = None if v.get("no_watermark") else args.watermark
         return {
             "id": v["id"], "okey": okey, "input_path": inp, "out_path": str(out_path),
             "transcript": transcript, "keep_voice": keep_voice,
-            "watermark": args.watermark, "watermark_size": args.watermark_size,
+            "watermark": wm, "watermark_size": args.watermark_size,
+            "no_watermark": bool(v.get("no_watermark")),
             "outro_logo": outro_logo, "outro_video": _pick_outro(v, args),
             "outro_title": args.outro_title, "outro_subtitle": args.outro_subtitle,
             "trim_endcard": args.trim_endcard, "bgm_replace": bgm,
+            "bgm_mode": getattr(args, "bgm_mode", "replace"),
+            "bgm_under_gain": getattr(args, "bgm_under_gain", 0.30),
+            "out_size": out_size,
+            "enhance": getattr(args, "enhance", None),
+            # Reviewed per-clip end-card cut (manifest field `endcard_cut`),
+            # used instead of freeze-detection when present.
+            "trim_to": v.get("endcard_cut"),
             "seed": seed, "repo": str(REPO_ROOT),
         }
 
@@ -621,7 +671,9 @@ def cmd_brandpass(args):
         sys.exit("No jobs — check --vertical / dub outputs / languages.")
     print(f"[brandpass] {len(jobs)} jobs  vertical={want_vertical or 'all'}  "
           f"workers={args.workers}  bgm_pool={'yes' if pool else 'no'}  "
-          f"trim_endcard={args.trim_endcard}", flush=True)
+          f"trim_endcard={args.trim_endcard}  "
+          f"enhance={getattr(args, 'enhance', None) or 'off'}  "
+          f"keep_audio={getattr(args, 'keep_audio', False)}", flush=True)
     t0 = time.time(); ok = skip = err = 0; fails = []
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         futs = {ex.submit(_brand_worker, j): j for j in jobs}
@@ -955,7 +1007,23 @@ def main():
     p.add_argument("--outro-man", default=None, help="outro for male talking-heads")
     p.add_argument("--outro-woman", default=None, help="outro for female talking-heads")
     p.add_argument("--trim-endcard", action="store_true")
+    p.add_argument("--keep-audio", action="store_true",
+                   help="pass the source audio through untouched (no Demucs, no "
+                        "re-mix, no TTS) while keeping per-language output routing")
+    p.add_argument("--enhance", default=None,
+                   choices=["light", "strong", "auto"],
+                   help="restore/upscale low-res compressed sources: hqdn3d de-block "
+                        "-> lanczos upscale -> mild unsharp. 'auto' = strong under 500px tall.")
     p.add_argument("--bgm-pool", default=None)
+    p.add_argument("--bgm-mode", choices=("replace", "under"), default="replace",
+                   help="replace = swap the source audio for the track (default); "
+                        "under = keep the source audio and lay the track beneath it")
+    p.add_argument("--bgm-under-gain", type=float, default=0.30,
+                   help="linear bed level for --bgm-mode under, applied AFTER the "
+                        "track is normalized to a common reference (default 0.30)")
+    p.add_argument("--out-size", default=None,
+                   help="output canvas WxH, both even (default 1080x1920). A "
+                        "non-standard 9:16 size such as 1026x1824 is a dedup lever.")
     p.add_argument("--workers", type=int, default=3)  # throttled: 3 workers x 3 threads ~= 9 cores, leaves headroom
     p.add_argument("--seed-base", type=int, default=0)
     p.add_argument("--no-sign", action="store_true",

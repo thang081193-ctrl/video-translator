@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import math
 import os
 import random
 import re
@@ -313,7 +314,7 @@ def _ffprobe_duration(path: str) -> float:
     r = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", path],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
     )
     return float(r.stdout.strip())
 
@@ -322,7 +323,7 @@ def _ffprobe_dims(path: str) -> tuple[int, int]:
     r = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
     )
     w, h = r.stdout.strip().split(",")
     return int(w), int(h)
@@ -344,7 +345,7 @@ def _ffprobe_display_dims(path: str) -> tuple[int, int]:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_streams", "-of", "json", path],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
     ).stdout
     st = json.loads(out)["streams"][0]
     w, h = int(st["width"]), int(st["height"])
@@ -390,7 +391,7 @@ def _ffprobe_fps(path: str, default: str = "30") -> str:
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=r_frame_rate",
              "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
         )
         val = r.stdout.strip()
         if "/" in val:
@@ -550,7 +551,7 @@ def _detect_content_crop(video_path: str, src_w: int, src_h: int,
             ["ffmpeg", "-ss", "1", "-i", video_path,
              "-vf", f"cropdetect={limit}:16:0",
              "-frames:v", "60", "-f", "null", "-"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
         )
         crops = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", r.stderr)
         if not crops:
@@ -589,7 +590,7 @@ def _scan_freeze(video_path: str, src_dur: float, min_tail_s: float = 0.3,
             ["ffmpeg", "-i", video_path,
              "-vf", f"freezedetect=n={noise}:d={min_freeze}",
              "-map", "0:v:0", "-an", "-f", "null", "-"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         )
         events = [(m.group(1), float(m.group(2)))
                   for m in re.finditer(r"freeze_(start|end):\s*([\d.]+)", r.stderr)]
@@ -951,7 +952,7 @@ def _render_bgm_bed(bgm_path: str, offset: float, total_dur: float, out_wav: str
         ["ffmpeg", "-y", "-stream_loop", "-1", "-i", bgm_path,
          "-af", f"atrim=start={offset:.3f}:end={end:.3f},asetpts=PTS-STARTPTS",
          "-c:a", "pcm_s16le", "-ar", "44100", "-ac", "2", out_wav],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
     )
     if r.returncode != 0:
         raise RuntimeError(f"BGM bed render failed (exit {r.returncode}): {r.stderr[-400:]}")
@@ -977,10 +978,115 @@ def _render_music_bed(bgm: str, music_gain: float, total_dur: float,
                 f"alimiter=limit=0.891:level=false",
          "-t", f"{total_dur:.3f}",
          "-c:a", "aac", "-b:a", "192k", mixed_audio],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if r.returncode != 0:
         raise RuntimeError(f"ffmpeg audio failed (exit {r.returncode}): {r.stderr[-800:]}")
+
+
+def _extract_outro_audio(outro_video: str | None, work: str) -> str | None:
+    """Pull the supplied outro video's own audio out to a wav, or None.
+
+    The outro is normalized `-an` (its video is re-scaled, never its audio), so
+    a brand card carrying a sting would go out silent unless the audio is lifted
+    here and mixed back into the tail. Returns None when there is no outro video
+    or it carries no audio stream — a generated Pillow card never has one.
+    """
+    if not outro_video:
+        return None
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
+         "stream=codec_name", "-of", "csv=p=0", outro_video],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if not probe.stdout.strip():
+        return None
+    out = os.path.join(work, "outro_audio.wav")
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", outro_video, "-vn",
+         "-c:a", "pcm_s16le", "-ar", "44100", "-ac", "2", out],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if r.returncode != 0:
+        log.warning(f"outro audio extract failed ({r.stderr[-200:]}); tail stays silent")
+        return None
+    return out
+
+
+def _mix_bgm_under_source(
+    src_audio: str,
+    bgm_bed: str,
+    gain: float,
+    working_dur: float,
+    total_dur: float,
+    mixed_audio: str,
+    outro_audio_path: str | None = None,
+) -> dict:
+    """Lay `bgm_bed` UNDER the clip's own audio without touching that audio.
+
+    The source track is the lead and passes through at its natural level — this
+    is the "add a bed, mute nothing" mode, so no Demucs, no re-level, no ducking.
+    The bed is first normalized to MUSIC_TARGET_LUFS (royalty-free masters run
+    -7..-20 LUFS, so a raw linear gain means something different on every track)
+    and only THEN scaled by `gain`, which makes `gain` reproducible across the
+    pool instead of a per-track lottery.
+
+    The source audio is silence-padded past `working_dur` so the bed plays alone
+    under the outro. `outro_audio_path` (the supplied outro video's own audio) is
+    delayed to `working_dur` and mixed in there, because the outro video is
+    normalized `-an` and its sting would otherwise be dropped.
+
+    `amix normalize=0` keeps absolute levels (normalize=1 would attenuate the
+    source by the input count, i.e. re-level the thing we promised not to touch).
+    Returns a QA dict of the measured levels.
+    """
+    bmeas = measure_loudness(bgm_bed)
+    norm_db = _clamp(MUSIC_TARGET_LUFS - bmeas["input_i"], -20.0, 20.0) if bmeas else 0.0
+    gain_db = 20 * math.log10(gain) if gain > 0 else -120.0
+
+    parts = [
+        f"[0:a]atrim=0:{working_dur:.3f},asetpts=N/SR/TB,"
+        f"apad=whole_dur={total_dur:.3f},aresample=44100[src]",
+        f"[1:a]volume={norm_db + gain_db:+.2f}dB,"
+        f"atrim=0:{total_dur:.3f},asetpts=N/SR/TB,aresample=44100[bed]",
+    ]
+    inputs = ["-i", src_audio, "-i", bgm_bed]
+    labels = ["[src]", "[bed]"]
+    if outro_audio_path:
+        inputs += ["-i", outro_audio_path]
+        parts.append(
+            f"[2:a]adelay={int(working_dur * 1000)}:all=1,"
+            f"apad=whole_dur={total_dur:.3f},aresample=44100[otr]"
+        )
+        labels.append("[otr]")
+    parts.append(
+        f"{''.join(labels)}amix=inputs={len(labels)}:normalize=0:dropout_transition=0,"
+        f"alimiter=limit=0.891:level=false[mix]"
+    )
+
+    r = subprocess.run(
+        ["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(parts),
+         "-map", "[mix]", "-t", f"{total_dur:.3f}",
+         "-c:a", "aac", "-b:a", "192k", mixed_audio],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"bgm-under mix failed (exit {r.returncode}): {r.stderr[-800:]}")
+
+    smeas = measure_loudness(src_audio)
+    fmeas = measure_loudness(mixed_audio)
+    bed_lufs = (bmeas["input_i"] + norm_db + gain_db) if bmeas else None
+    return {
+        "src_in": round(smeas["input_i"], 1) if smeas else None,
+        "bgm_in": round(bmeas["input_i"], 1) if bmeas else None,
+        "bed_out": round(bed_lufs, 1) if bed_lufs is not None else None,
+        "gain_db": round(gain_db, 1),
+        "margin_db": (round(smeas["input_i"] - bed_lufs, 1)
+                      if smeas and bed_lufs is not None else None),
+        "final_i": round(fmeas["input_i"], 1) if fmeas else None,
+        "final_tp": round(fmeas["input_tp"], 1) if fmeas else None,
+        "outro_audio": bool(outro_audio_path),
+    }
 
 
 def _mix_voice_over_bgm(
@@ -1026,7 +1132,7 @@ def _mix_voice_over_bgm(
              f"[0:a]volume={legacy_bgm_vol},apad[v1];"
              f"[v0][v1]amix=inputs=2:duration=first:dropout_transition=0,atrim=duration={total_dur}[aout]",
              "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", mixed_audio],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if r.returncode != 0:
             raise RuntimeError(f"ffmpeg mix failed (exit {r.returncode}): {r.stderr[-800:]}")
@@ -1070,7 +1176,7 @@ def _mix_voice_over_bgm(
              f"[v0][v1]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
              f"atrim=duration={total_dur},alimiter=limit=0.891:level=false[aout]",
              "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", mixed_audio],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if r.returncode != 0:
             raise RuntimeError(f"ffmpeg mix failed (exit {r.returncode}): {r.stderr[-800:]}")
@@ -1118,10 +1224,16 @@ def brand_pass_video(
     outro_duration: float | None = None,
     bgm_volume: float | None = None,
     trim_endcard: bool = False,
+    trim_to: float | None = None,
     pad_bg_image: str | None = None,
     bgm_replace_path: str | None = None,
+    bgm_under_path: str | None = None,
+    bgm_under_gain: float = 0.30,
+    outro_audio: bool = True,
     keep_original_voice: bool = False,
     detect_baked_padding: bool = False,
+    enhance: str | None = None,
+    out_size: tuple[int, int] | None = None,
     work_root: str | None = None,
     random_seed: int | None = None,
 ) -> str:
@@ -1133,10 +1245,23 @@ def brand_pass_video(
     Outro: pass `outro_logo_image=<png_path>` to add a logo above the brand text
     on the outro card.
 
+    Explicit trim: `trim_to=<seconds>` keeps only the first N seconds of the
+    source, for when the end-card boundary was decided outside this function
+    (a reviewed cut list). It takes precedence over `trim_endcard`, whose
+    freeze-detection cannot see an ANIMATED competitor card.
+
     End-card trim: with `trim_endcard=True`, runs ffmpeg freeze-detection on the
     source and trims the trailing static end-card the video ends on (e.g. a
     competitor's app catalog screen). Only trims when a freeze segment reaches
     EOF; videos ending on motion (e.g. a UGC testimonial) are left intact.
+
+    Image restore/upscale: `enhance` opts into a smoothing chain for
+    low-resolution, heavily-compressed sources (scraped competitor ads are
+    routinely 360x640 @ ~150 kbps; a plain 3x bicubic upscale magnifies the
+    blocking). Values: None (off, default -- unchanged behaviour), "light",
+    "strong", or "auto" (picks strong when the shorter side is under 500px, else
+    light). The chain is hqdn3d de-block BEFORE the upscale, lanczos for the
+    upscale itself, and a mild unsharp AFTER, so edges survive the denoise.
 
     Baked-padding strip: `detect_baked_padding=True` opts into the legacy
     side-blur / dark-bar detectors that CROP into the frame. Default False —
@@ -1144,6 +1269,22 @@ def brand_pass_video(
     no-QA batches); it frames purely by the file's true DISPLAY aspect
     (post-autorotate, post-SAR via `_ffprobe_display_dims`) and always
     un-anamorphs to square pixels before cover/pad.
+
+    Output size: `out_size=(w, h)` renders to those dimensions instead of the
+    1080x1920 default — both must be even (libx264 yuv420p). Framing, safe-zone
+    offsets and the outro are all derived from it, so a non-standard canvas
+    (e.g. 1026x1824, still exactly 9:16) is a legitimate dedup-evasion lever:
+    it changes every encoded dimension without changing what the ad looks like.
+
+    BGM under the source audio: `bgm_under_path=<track>` keeps the clip's OWN
+    audio at its natural level and lays the track UNDER it at `bgm_under_gain`
+    (linear, default 0.30). This is the "add a bed, mute nothing" mode — it does
+    NOT replace the source audio the way `bgm_replace_path` does, and it does not
+    run Demucs. Only valid on the music-only path (empty `transcript`), where the
+    source audio passes through untouched; with a transcript the voice mixer owns
+    the bed and raises ValueError. `outro_audio=True` (default) also carries the
+    supplied outro video's OWN audio into the tail, so a brand sting is heard
+    instead of the silence the `-an` outro normalize would otherwise leave.
 
     `random_seed=None` → fresh random each call. `random_seed=<int>` → deterministic.
     Explicit `voice` / `outro_duration` override the jittered pick.
@@ -1166,7 +1307,24 @@ def brand_pass_video(
         raise FileNotFoundError(f"outro_video: {outro_video}")
     if pad_bg_image and not os.path.isfile(pad_bg_image):
         raise FileNotFoundError(f"pad_bg_image: {pad_bg_image}")
+    if bgm_under_path and not os.path.isfile(bgm_under_path):
+        raise FileNotFoundError(f"bgm_under_path: {bgm_under_path}")
+    if bgm_under_path and bgm_replace_path:
+        raise ValueError("bgm_under_path and bgm_replace_path are mutually exclusive "
+                         "(one lays a bed UNDER the source audio, the other REPLACES it)")
+    if bgm_under_path and transcript and transcript.strip():
+        raise ValueError("bgm_under_path is music-path only: with a transcript the "
+                         "measured voice mixer owns the bed (see _mix_voice_over_bgm)")
     os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
+
+    # Output canvas. Shadows the module W/H so every filter below is written
+    # against the requested size; helpers that default to the module constants
+    # (_is_target_aspect) are passed these explicitly.
+    W, H = out_size or (globals()["W"], globals()["H"])
+    if W <= 0 or H <= 0 or W % 2 or H % 2:
+        raise ValueError(f"out_size must be positive and even, got {W}x{H}")
+    TOP_SAFE = int(H * 0.14)
+    SIDE_SAFE = int(W * 0.06)
 
     p = _build_jittered_params(random_seed)
     rng = random.Random(random_seed)   # second rng for outro frame jitter
@@ -1180,7 +1338,7 @@ def brand_pass_video(
             _probe = subprocess.run(
                 ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
                  "-of", "default=noprint_wrappers=1:nokey=1", outro_video],
-                capture_output=True, text=True, check=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
             )
             p["outro_dur"] = round(float(_probe.stdout.strip()), 2)
         except Exception as _e:
@@ -1206,18 +1364,28 @@ def brand_pass_video(
         # 0. Optional: detect + trim end-card from source
         working_input = input_path
         working_dur = _ffprobe_duration(input_path)
-        if trim_endcard:
-            endcard_t = _detect_endcard_start(input_path, working_dur)
-            if endcard_t:
+        if trim_to is not None or trim_endcard:
+            if trim_to is not None:
+                endcard_t = min(float(trim_to), working_dur)
+                if endcard_t < 0.5:
+                    raise ValueError(f"trim_to={trim_to} leaves nothing of {input_path}")
+            else:
+                endcard_t = _detect_endcard_start(input_path, working_dur)
+            if endcard_t and endcard_t < working_dur - 0.05:
                 trimmed = os.path.join(work, "src_trimmed.mp4")
                 subprocess.run(
                     ["ffmpeg", "-y", "-i", input_path, "-t", f"{endcard_t:.3f}",
                      "-c", "copy", "-avoid_negative_ts", "make_zero", trimmed],
-                    capture_output=True, check=True, text=True,
+                    capture_output=True, check=True, text=True, encoding="utf-8", errors="replace",
                 )
-                log.info(f"End-card trim: {working_dur:.2f}s → {endcard_t:.2f}s (cut {working_dur - endcard_t:.2f}s)")
+                # `-c copy` cuts on packet boundaries, so the trimmed file can run
+                # PAST the requested time. Believe the file, but never keep more
+                # than was asked for -- the body encode below is given -t.
+                actual = _ffprobe_duration(trimmed)
+                log.info(f"End-card trim: {working_dur:.2f}s → {min(endcard_t, actual):.2f}s "
+                         f"(asked {endcard_t:.2f}s, copy-trim gave {actual:.2f}s)")
                 working_input = trimmed
-                working_dur = endcard_t
+                working_dur = min(endcard_t, actual)
             else:
                 log.info("No clear end-card detected; using full source")
 
@@ -1250,8 +1418,21 @@ def brand_pass_video(
             stems = separate_audio(src_audio, demucs_dir, model="htdemucs")
             orig_vocals = stems["vocals"]
 
-        # Pick BGM source: replacement track > Demucs-separated > raw source
-        if bgm_replace_path:
+        # Pick BGM source: replacement track > bed-under track > Demucs-separated > raw source
+        if bgm_under_path:
+            # Bed laid UNDER the source audio. Same smart-start as a replacement
+            # track (royalty-free masters open on a sparse build-up), and always
+            # rendered as a finite looped bed so a 20 s track covers a 56 s ad.
+            rng_bgm = random.Random(random_seed + 0xB61) if random_seed is not None else random.Random()
+            bgm_off, bgm_info = _pick_bgm_start(bgm_under_path, total_dur, rng_bgm)
+            bgm = _render_bgm_bed(bgm_under_path, bgm_off, total_dur,
+                                  os.path.join(work, "bgm_bed.wav"))
+            log.info(
+                f"BGMUNDER {os.path.basename(bgm_under_path)} offset={bgm_off:.1f}s "
+                f"gain={bgm_under_gain:.2f} section={bgm_info.get('score_db')}dB "
+                f"vs intro={bgm_info.get('intro_db')}dB onset={bgm_info.get('onset')}"
+            )
+        elif bgm_replace_path:
             # Smart start: replacement tracks open on their best section, not
             # the (often near-silent) intro. Demucs stems / source passthrough
             # never get an offset — they must stay aligned with the video.
@@ -1322,17 +1503,32 @@ def brand_pass_video(
             # loop_bgm). A replacement track is loudness-normalized to
             # MUSIC_TARGET_LUFS (royalty-free masters vary -7..-20 LUFS); the
             # source's own mix passes through untouched to preserve its level.
-            music_gain = 0.0
-            if bgm_replace_path:
-                bmeas = measure_loudness(bgm)
-                if bmeas is not None:
-                    music_gain = _clamp(MUSIC_TARGET_LUFS - bmeas["input_i"], -20.0, 20.0)
-            log.info(f"Music-only: {os.path.basename(bgm)} gain={music_gain:+.1f}dB "
-                     f"loop={loop_bgm} → {total_dur:.2f}s")
-            _render_music_bed(bgm, music_gain, total_dur, loop_bgm, mixed_audio)
-            fmeas = measure_loudness(mixed_audio)
-            log.info(f"MUSICMIX final={fmeas['input_i'] if fmeas else None}LUFS "
-                     f"tp={fmeas['input_tp'] if fmeas else None}")
+            if bgm_under_path:
+                # Source audio leads, bed sits under it, outro sting recovered.
+                outro_a = _extract_outro_audio(outro_video, work) if outro_audio else None
+                qa = _mix_bgm_under_source(
+                    src_audio, bgm, bgm_under_gain, working_dur, total_dur,
+                    mixed_audio, outro_audio_path=outro_a,
+                )
+                log.info(
+                    "BEDMIX "
+                    f"src={qa['src_in']}LUFS bgm_in={qa['bgm_in']} bed={qa['bed_out']} "
+                    f"gain={qa['gain_db']}dB margin={qa['margin_db']}dB "
+                    f"final={qa['final_i']}LUFS tp={qa['final_tp']} "
+                    f"outro_audio={qa['outro_audio']}"
+                )
+            else:
+                music_gain = 0.0
+                if bgm_replace_path:
+                    bmeas = measure_loudness(bgm)
+                    if bmeas is not None:
+                        music_gain = _clamp(MUSIC_TARGET_LUFS - bmeas["input_i"], -20.0, 20.0)
+                log.info(f"Music-only: {os.path.basename(bgm)} gain={music_gain:+.1f}dB "
+                         f"loop={loop_bgm} → {total_dur:.2f}s")
+                _render_music_bed(bgm, music_gain, total_dur, loop_bgm, mixed_audio)
+                fmeas = measure_loudness(mixed_audio)
+                log.info(f"MUSICMIX final={fmeas['input_i'] if fmeas else None}LUFS "
+                         f"tp={fmeas['input_tp'] if fmeas else None}")
 
         # 6. Video transforms (DISPLAY-aspect framing — squish-proof by construction)
         # Route purely on the file's TRUE display aspect (post-autorotate,
@@ -1370,15 +1566,36 @@ def brand_pass_video(
 
         # Route on DISPLAY aspect. Within +-0.05 of 9:16 -> COVER (no crop).
         # Wider/narrower -> blur-PAD (never cut burned-in side/edge text).
-        is_target = _is_target_aspect(disp_w, disp_h)
+        is_target = _is_target_aspect(disp_w, disp_h, W, H)
         log.info(f"Display aspect: {disp_w}x{disp_h} ({disp_w/disp_h:.4f})  "
                  f"is_9:16={is_target}  coded={src_w}x{src_h}  "
                  f"detect_baked_padding={detect_baked_padding}  "
                  f"pad_bg={'yes' if pad_bg_image else 'no'}")
 
+        # Enhance (opt-in): de-block BEFORE the upscale, lanczos DURING it,
+        # mild unsharp AFTER. `pre` already ends square-pixel + source-res, so
+        # appending the denoise there puts it on the original pixels where the
+        # compression artefacts actually live.
+        enh = (enhance or "").strip().lower()
+        if enh == "auto":
+            enh = "strong" if min(disp_w, disp_h) < 500 else "light"
+        if enh in ("light", "strong"):
+            dn, us = (("hqdn3d=3:2:6:6", "unsharp=5:5:0.8:5:5:0.0") if enh == "light"
+                      else ("hqdn3d=4:3:6:6", "unsharp=5:5:0.9:5:5:0.0"))
+            pre = f"{pre}{dn},"
+            scale_flags = ":flags=lanczos+accurate_rnd+full_chroma_int"
+            post_sharp = f",{us}"
+            log.info(f"Enhance: {enh} ({dn} -> lanczos -> {us})")
+        elif enh:
+            raise ValueError(f"enhance must be None/light/strong/auto, got {enhance!r}")
+        else:
+            scale_flags = ""
+            post_sharp = ""
+
         color = (
             f"eq=saturation={p['saturation']}:contrast={p['contrast']}:gamma={p['gamma']},"
             f"hue=h={p['hue']}"
+            f"{post_sharp}"
         )
 
         if is_target:
@@ -1391,7 +1608,7 @@ def brand_pass_video(
             scaled_h = int(H * p["zoom"])
             zoom_crop = (
                 f"{pre}"
-                f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,"
+                f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase{scale_flags},"
                 f"crop={W}:{H}:(in_w-{W})/2+({p['crop_dx']}):(in_h-{H})/2+({p['crop_dy']}),"
                 f"setsar=1"
             )
@@ -1424,7 +1641,7 @@ def brand_pass_video(
                 log.info("Bg: blur-pad (max content)")
 
             fg_chunk = (
-                f"[0:v]{pre}scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                f"[0:v]{pre}scale={W}:{H}:force_original_aspect_ratio=decrease{scale_flags},"
                 f"setsar=1,{color}[fg]"
             )
             overlay_chunk = "[bgblur][fg]overlay=(W-w)/2:(H-h)/2:shortest=1,setsar=1"
@@ -1435,7 +1652,23 @@ def brand_pass_video(
 
         body = os.path.join(work, "body.mp4")
         log.info("Encoding transformed body (zoom/pad + color + watermark) ...")
-        if watermark_image:
+        if not watermark_image and not (watermark_text or "").strip():
+            # No image AND no text = no watermark at all. Without this branch the
+            # call falls through to drawtext and burns DEFAULT_WATERMARK into the
+            # frame, so a caller asking for a clean corner gets someone else's
+            # brand name. Used for sources that already carry a competitor logo
+            # in the corner our watermark would occupy.
+            log.info("Watermark: none (explicitly disabled)")
+            subprocess.run(
+                ["ffmpeg", "-y"] + bg_inputs +
+                ["-filter_complex", f"{bg_label}{bg_filter}[vout]", "-map", "[vout]",
+                 "-t", f"{working_dur:.3f}",
+                 "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
+                 "-an", "-shortest", body],
+                capture_output=True, check=True, text=True,
+                encoding="utf-8", errors="replace",
+            )
+        elif watermark_image:
             wm_x = SIDE_SAFE + p["wm_dx"]
             wm_y = TOP_SAFE + 20 + p["wm_dy"]
             wm_x = max(0, min(W - watermark_size, wm_x))
@@ -1452,9 +1685,10 @@ def brand_pass_video(
             subprocess.run(
                 ["ffmpeg", "-y"] + bg_inputs + wm_inputs +
                 ["-filter_complex", filter_complex, "-map", "[vout]",
+                 "-t", f"{working_dur:.3f}",
                  "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
                  "-an", "-shortest", body],
-                capture_output=True, check=True, text=True,
+                capture_output=True, check=True, text=True, encoding="utf-8", errors="replace",
             )
         else:
             # drawtext watermark (legacy text-based)
@@ -1470,9 +1704,10 @@ def brand_pass_video(
                 subprocess.run(
                     ["ffmpeg", "-y", "-i", working_input,
                      "-vf", f"{bg_filter},{drawtext_wm}",
+                     "-t", f"{working_dur:.3f}",
                      "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
                      "-an", body],
-                    capture_output=True, check=True, text=True,
+                    capture_output=True, check=True, text=True, encoding="utf-8", errors="replace",
                 )
             else:
                 # Branch 6b: multi-input filter_complex with drawtext_wm appended
@@ -1480,9 +1715,10 @@ def brand_pass_video(
                 subprocess.run(
                     ["ffmpeg", "-y"] + bg_inputs +
                     ["-filter_complex", filter_complex, "-map", "[vout]",
+                     "-t", f"{working_dur:.3f}",
                      "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
                      "-an", "-shortest", body],
-                    capture_output=True, check=True, text=True,
+                    capture_output=True, check=True, text=True, encoding="utf-8", errors="replace",
                 )
 
         # 7. Outro card — user-supplied mp4 OR Pillow-generated 2026 designed card.
@@ -1496,11 +1732,15 @@ def brand_pass_video(
             log.info(f"Normalizing supplied outro video → {W}x{H}@{target_fps}fps, no audio ...")
             subprocess.run(
                 ["ffmpeg", "-y", "-i", outro_video,
-                 "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                 # lanczos: brand outros are authored below 1080x1920 (a 720x1280
+                 # card is common) and land on EVERY deliverable, so the default
+                 # bicubic softening of the logo/CTA text is worth avoiding.
+                 "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease"
+                        f":flags=lanczos+accurate_rnd+full_chroma_int,"
                         f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={target_fps}",
                  "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
                  "-pix_fmt", "yuv420p", "-an", outro],
-                capture_output=True, check=True, text=True,
+                capture_output=True, check=True, text=True, encoding="utf-8", errors="replace",
             )
         else:
             outro_frame_png = os.path.join(work, "outro_frame.png")
@@ -1517,7 +1757,7 @@ def brand_pass_video(
                  "-t", str(p["outro_dur"]),
                  "-c:v", "libx264", "-preset", p["preset"], "-crf", str(p["crf"]),
                  "-pix_fmt", "yuv420p", outro],
-                capture_output=True, check=True, text=True,
+                capture_output=True, check=True, text=True, encoding="utf-8", errors="replace",
             )
 
         # 8. Concat body + outro, mux with mixed audio
@@ -1542,7 +1782,7 @@ def brand_pass_video(
              "-metadata", f"creation_time={p['fake_creation_time']}",
              "-movflags", "+faststart",
              output_path],
-            capture_output=True, check=True, text=True,
+            capture_output=True, check=True, text=True, encoding="utf-8", errors="replace",
         )
 
         log.info(f"Brand-pass output: {output_path} ({os.path.getsize(output_path) // 1024} KB)")
