@@ -353,6 +353,45 @@ scaling. Two paths, by group:
 So a typical "add Brazil" = reuse all `_music/` (swap to BR-trending BGM) + reuse
 `Português/` voiced outputs. "Add Japan" = reuse `_music/` (JP BGM) + dub voiced→ja.
 
+## QA sweep — run this instead of hand-rolling contact sheets
+
+`qa_sweep.py` batches the slow half of a pack. Measured on the 41-clip Mars VD 0809 pack:
+59 min wall clock, only 6.5 min of which was render. The sweep does the rest in ~100 s.
+
+```
+# BEFORE render -- probe, twin pairs, baked padding IN THE SOURCES, tail montages
+"<PY>" qa_sweep.py scan --src "<sources>" --work "<work>/_qa"
+
+# pick exact end-card cuts from the tail sheets, 0.15 s steps
+"<PY>" qa_sweep.py fine --src "<sources>" --windows "VD_03:9.5-10.7,VD_16:5.7-6.9"
+
+# AFTER render -- geometry, padding, PCM audio, uniqueness, output montages
+"<PY>" qa_sweep.py verify --out "<renders>" --manifest "<work>/_ultimate/manifest.json"        --expect 954x1696 --outro-secs 3
+```
+
+Four things it exists to stop you repeating:
+
+- **Every sheet is a MONTAGE** (`--per-sheet`, default 6), so a 41-clip batch is ~7 image
+  reads, not 41. This was the single biggest time sink in 0809.
+- **`scan` finds baked letterbox in the SOURCES.** brand_pass's own padding detector is
+  opt-in and off by default (correctly — it false-positives on clean 9:16), so a clip whose
+  picture sits inside black bars gets upscaled bars and all, and *every dims check still
+  passes*. 0809 shipped one such clip and had to re-render it.
+- **Audio is measured on decoded PCM, never `volumedetect`** — which reported −19 dB on a
+  segment that was digital silence and cost ~6 min chasing a non-existent bug.
+- **`verify` asks for a bed-muted control render only where it matters.** Comparing the mix
+  to the source measures *bed prominence*, not correctness, and false-fails on a quiet
+  source. It names the clips over `--bed-tol` (default 1.5 dB) so you render controls for
+  those few instead of the whole batch; re-run with `--ctrl <dir>` to get real drift. On
+  0809 that was 1 clip out of 41.
+
+Duplicates are **reported, never dropped** — one output per source file is the operator's
+rule. Give each twin a different BGM cluster and keep the pair out of one ad set.
+
+Soft hits marked with `?` (and any padding hit) are confirm-by-eye: a dark intro card reads
+as padding. The mechanical pass is blind to branding and framing taste — always read the
+output montages before delivering.
+
 ## Notes & pitfalls
 - **CPU Whisper** is the default (this machine's CUDA fails inference — see memory). `small` is the speed/accuracy sweet spot.
 - `_*` folders under `--src` are skipped by the scanner, so `_ultimate/` outputs never get re-ingested.
