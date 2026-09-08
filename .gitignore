@@ -44,3 +44,10 @@ _temp_qa/
 # local scratch / deliverables (never commit — 20GB+)
 _deliverables_*/
 _vast_pull/
+
+# Pack scratch trees — _test15/, _tradebuddy_2806/, _mars0809/, _work0806/ ... Each run
+# invents a new name and they run to hundreds of MB (1.4 GB sitting here when this was
+# added), so blanket-ignore every top-level underscore DIRECTORY. _claude_skills/ is the
+# one that is genuinely tracked; anything else new needs `git add -f` on purpose.
+/_*/
+!/_claude_skills/
