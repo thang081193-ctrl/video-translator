@@ -519,6 +519,8 @@ def _brand_worker(job: dict) -> tuple[str, str, float, str]:
         )
         if job.get("enhance"):
             kwargs["enhance"] = job["enhance"]
+        if job.get("no_outro"):
+            kwargs["append_outro"] = False
         if job.get("trim_to"):
             kwargs["trim_to"] = job["trim_to"]
         if job["watermark"]:
@@ -569,6 +571,9 @@ def cmd_brandpass(args):
               args.outro_man, args.outro_woman):
         if p and not Path(p).is_file():
             sys.exit(f"file not found: {p}")
+    if getattr(args, "no_outro", False) and (args.outro_video or args.outro_man
+                                             or args.outro_woman):
+        sys.exit("--no-outro contradicts --outro-video/--outro-man/--outro-woman")
     outro_logo = args.outro_logo or args.watermark
     want_vertical = args.vertical
     target_langs = _parse_langs(args.target_langs)  # optional filter on dub outputs
@@ -625,6 +630,7 @@ def cmd_brandpass(args):
             "bgm_under_gain": getattr(args, "bgm_under_gain", 0.30),
             "out_size": out_size,
             "enhance": getattr(args, "enhance", None),
+            "no_outro": getattr(args, "no_outro", False),
             # Reviewed per-clip end-card cut (manifest field `endcard_cut`),
             # used instead of freeze-detection when present.
             "trim_to": v.get("endcard_cut"),
@@ -673,7 +679,8 @@ def cmd_brandpass(args):
           f"workers={args.workers}  bgm_pool={'yes' if pool else 'no'}  "
           f"trim_endcard={args.trim_endcard}  "
           f"enhance={getattr(args, 'enhance', None) or 'off'}  "
-          f"keep_audio={getattr(args, 'keep_audio', False)}", flush=True)
+          f"keep_audio={getattr(args, 'keep_audio', False)}  "
+          f"outro={'off' if getattr(args, 'no_outro', False) else 'on'}", flush=True)
     t0 = time.time(); ok = skip = err = 0; fails = []
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         futs = {ex.submit(_brand_worker, j): j for j in jobs}
@@ -1007,6 +1014,9 @@ def main():
     p.add_argument("--outro-man", default=None, help="outro for male talking-heads")
     p.add_argument("--outro-woman", default=None, help="outro for female talking-heads")
     p.add_argument("--trim-endcard", action="store_true")
+    p.add_argument("--no-outro", action="store_true",
+                   help="ship the body only: no outro card appended (not even the "
+                        "generated default) and the audio ends with the clip")
     p.add_argument("--keep-audio", action="store_true",
                    help="pass the source audio through untouched (no Demucs, no "
                         "re-mix, no TTS) while keeping per-language output routing")

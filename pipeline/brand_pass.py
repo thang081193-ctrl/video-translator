@@ -1230,6 +1230,7 @@ def brand_pass_video(
     bgm_under_path: str | None = None,
     bgm_under_gain: float = 0.30,
     outro_audio: bool = True,
+    append_outro: bool = True,
     keep_original_voice: bool = False,
     detect_baked_padding: bool = False,
     enhance: str | None = None,
@@ -1244,6 +1245,12 @@ def brand_pass_video(
 
     Outro: pass `outro_logo_image=<png_path>` to add a logo above the brand text
     on the outro card.
+
+    No outro: `append_outro=False` ships the body only — no brand card is
+    appended (not even the generated default) and the audio ends with the clip
+    instead of running on under a card that isn't there. For batches whose app
+    outro does not exist yet and will be concatenated later. Contradicts
+    `outro_video`, so passing both raises ValueError.
 
     Explicit trim: `trim_to=<seconds>` keeps only the first N seconds of the
     source, for when the end-card boundary was decided outside this function
@@ -1315,6 +1322,9 @@ def brand_pass_video(
     if bgm_under_path and transcript and transcript.strip():
         raise ValueError("bgm_under_path is music-path only: with a transcript the "
                          "measured voice mixer owns the bed (see _mix_voice_over_bgm)")
+    if outro_video and not append_outro:
+        raise ValueError("append_outro=False contradicts outro_video: a supplied "
+                         "outro would be silently dropped")
     os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
 
     # Output canvas. Shadows the module W/H so every filter below is written
@@ -1343,6 +1353,10 @@ def brand_pass_video(
             p["outro_dur"] = round(float(_probe.stdout.strip()), 2)
         except Exception as _e:
             log.warning(f"ffprobe outro_video failed ({_e}); keeping jittered outro_dur")
+    if not append_outro:
+        # Every audio path renders to working_dur + outro_dur, so a zero-length
+        # outro is what stops the music bed / voice mix running past the body.
+        p["outro_dur"] = 0.0
 
     if work_root:
         os.makedirs(work_root, exist_ok=True)
@@ -1728,7 +1742,9 @@ def brand_pass_video(
         # sources (slow-motion playback inflated the output duration).
         target_fps = _ffprobe_fps(body)
         outro = os.path.join(work, "outro.mp4")
-        if outro_video:
+        if not append_outro:
+            log.info("Outro: none (append_outro=False) — body only")
+        elif outro_video:
             log.info(f"Normalizing supplied outro video → {W}x{H}@{target_fps}fps, no audio ...")
             subprocess.run(
                 ["ffmpeg", "-y", "-i", outro_video,
@@ -1760,10 +1776,13 @@ def brand_pass_video(
                 capture_output=True, check=True, text=True, encoding="utf-8", errors="replace",
             )
 
-        # 8. Concat body + outro, mux with mixed audio
+        # 8. Concat body + outro, mux with mixed audio. Without an outro the list
+        # holds the body alone, so the final pass (CFR, metadata, faststart) is
+        # the same one every other render goes through.
         concat_list = os.path.join(work, "list.txt")
+        parts = [body, outro] if append_outro else [body]
         with open(concat_list, "w", encoding="utf-8") as f:
-            f.write(f"file '{body}'\nfile '{outro}'\n")
+            f.write("".join(f"file '{part}'\n" for part in parts))
 
         log.info(f"Concat + mux mixed audio → final (CFR @ {target_fps}fps) ...")
         subprocess.run(

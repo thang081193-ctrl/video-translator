@@ -244,6 +244,11 @@ evasion). Outro routing: `--outro-man`/`--outro-woman` selected by the video's
 `outro_variant`; `--outro-video` is the generic fallback. Results recorded in
 `outputs` (`{iso: path}` voice, `{"_": path}` music).
 
+**App outro not ready yet?** `--no-outro` renders the body only — no card at all (not
+even the generated default) and the audio ends with the clip. Attach the outro later
+with `recovery/append_outro_list.py`, or re-render with `--outro-video` and the same
+`--seed-base` to reproduce every fingerprint parameter.
+
 Audio routing is driven by the manifest, NOT re-detected:
 - `has_voice=True` → `keep_original_voice=True` (keeps the dubbed/original talking-head voice; no robot re-dub), BGM swapped from the pool cluster.
 - `has_voice=False` → music-only, BGM swapped (or source BGM passthrough if no pool).
