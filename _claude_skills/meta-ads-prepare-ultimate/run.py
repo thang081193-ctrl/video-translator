@@ -400,6 +400,8 @@ def cmd_dub(args):
     that voice, so no dub is produced (the organized original is recorded as the
     `dubbed_outputs[lang]` so brandpass can route it). Every other target lang is
     Edge-TTS dubbed (over Demucs-isolated BGM) into `<src>/<lang_folder>/CODE_*`.
+    With --revoice-source the source lang is dubbed too, into
+    `<src>/_redub/<lang_folder>/CODE_*` so it never lands on the original.
     """
     src = Path(args.src).resolve()
     data = M.load_manifest(src)
@@ -428,7 +430,13 @@ def cmd_dub(args):
                 continue  # Opus hasn't filled this lang yet — skip silently
             tfolder = L.iso_to_folder(tlang)
             tcode = L.folder_to_code(tfolder) or tlang.upper()
-            out_path = src / tfolder / _target_name(src_renamed, tcode)
+            out_dir = src / tfolder
+            if tlang == src_lang:
+                # --revoice-source: the target name IS the organized source's name,
+                # so writing beside it would find the original as a finished dub
+                # (silent no-op) or overwrite it. Park it in a _ folder scan skips.
+                out_dir = src / "_redub" / tfolder
+            out_path = out_dir / _target_name(src_renamed, tcode)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             if out_path.exists() and out_path.stat().st_size > 100_000:
                 dubbed[tlang] = str(out_path)
@@ -991,7 +999,8 @@ def main():
     p.add_argument("--revoice-source", action="store_true",
                    help="also TTS-dub the source language (don't keep original audio). "
                         "Use when the original VO must be replaced — e.g. rebranding the "
-                        "spoken app name. Requires translations filled for the source lang too.")
+                        "spoken app name. Requires translations filled for the source lang too. "
+                        "The source-lang dub is written to <src>/_redub/<lang_folder>/.")
     p.set_defaults(func=cmd_dub)
 
     p = sub.add_parser("framegrab"); p.add_argument("--src", required=True)
